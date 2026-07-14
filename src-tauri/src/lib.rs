@@ -2,6 +2,7 @@
 //! Tauri command surface for DeePMD Studio.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::sync::Arc;
@@ -18,7 +19,8 @@ use deepmd_studio_core::{
 };
 use directories::UserDirs;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
+use sysinfo::{Disks, System};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -124,6 +126,100 @@ struct RuntimeLocation {
     source: deepmd_studio_core::RuntimeSource,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatingSystemReport {
+    name: String,
+    version: String,
+    kernel: String,
+    hostname: String,
+    architecture: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CpuReport {
+    brand: String,
+    vendor: String,
+    physical_cores: usize,
+    logical_cores: usize,
+    frequency_mhz: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryReport {
+    total_bytes: u64,
+    available_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskReport {
+    name: String,
+    mount_point: String,
+    file_system: String,
+    kind: String,
+    total_bytes: u64,
+    available_bytes: u64,
+    removable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemReport {
+    operating_system: OperatingSystemReport,
+    cpu: CpuReport,
+    memory: MemoryReport,
+    disks: Vec<DiskReport>,
+}
+
+fn collect_system_report() -> SystemReport {
+    let mut system = System::new_all();
+    system.refresh_all();
+    let cpu = system.cpus().first();
+    let disks = Disks::new_with_refreshed_list()
+        .iter()
+        .filter(|disk| disk.total_space() > 0)
+        .map(|disk| DiskReport {
+            name: disk.name().to_string_lossy().into_owned(),
+            mount_point: disk.mount_point().display().to_string(),
+            file_system: disk.file_system().to_string_lossy().into_owned(),
+            kind: format!("{:?}", disk.kind()),
+            total_bytes: disk.total_space(),
+            available_bytes: disk.available_space(),
+            removable: disk.is_removable(),
+        })
+        .collect();
+    SystemReport {
+        operating_system: OperatingSystemReport {
+            name: System::name().unwrap_or_else(|| std::env::consts::OS.to_owned()),
+            version: System::long_os_version().unwrap_or_default(),
+            kernel: System::kernel_version().unwrap_or_default(),
+            hostname: System::host_name().unwrap_or_default(),
+            architecture: std::env::consts::ARCH.to_owned(),
+        },
+        cpu: CpuReport {
+            brand: cpu
+                .map(|value| value.brand().trim().to_owned())
+                .unwrap_or_default(),
+            vendor: cpu
+                .map(|value| value.vendor_id().trim().to_owned())
+                .unwrap_or_default(),
+            physical_cores: system
+                .physical_core_count()
+                .unwrap_or_else(|| system.cpus().len()),
+            logical_cores: system.cpus().len(),
+            frequency_mhz: cpu.map_or(0, sysinfo::Cpu::frequency),
+        },
+        memory: MemoryReport {
+            total_bytes: system.total_memory(),
+            available_bytes: system.available_memory(),
+        },
+        disks,
+    }
+}
+
 #[tauri::command]
 async fn get_catalog(state: State<'_, AppState>) -> Result<Value, String> {
     state
@@ -134,12 +230,84 @@ async fn get_catalog(state: State<'_, AppState>) -> Result<Value, String> {
 }
 
 #[tauri::command]
+async fn get_training_schema(state: State<'_, AppState>) -> Result<Value, String> {
+    state
+        .runtime
+        .bridge("train-schema")
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn inspect_training_input(state: State<'_, AppState>, path: String) -> Result<Value, String> {
+    state
+        .runtime
+        .bridge_with_payload("validate-input", &json!({"path": path}))
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn validate_training_input(
+    state: State<'_, AppState>,
+    input: Value,
+) -> Result<Value, String> {
+    state
+        .runtime
+        .bridge_with_payload("validate-input", &json!({"input": input}))
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn save_training_input(path: String, input: Value) -> Result<String, String> {
+    let mut destination = PathBuf::from(path);
+    if destination.extension().is_none() {
+        destination.set_extension("json");
+    }
+    if destination
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("json"))
+    {
+        return Err("Generated training inputs must use the .json extension.".into());
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The selected output path has no parent directory.".to_owned())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "Output directory does not exist: {}",
+            parent.display()
+        ));
+    }
+    let mut serialized = serde_json::to_string_pretty(&input)
+        .map_err(|error| format!("failed to serialize training input: {error}"))?;
+    serialized.push('\n');
+    fs::write(&destination, serialized)
+        .map_err(|error| format!("failed to save {}: {error}", destination.display()))?;
+    Ok(destination.display().to_string())
+}
+
+#[tauri::command]
+async fn get_system_report() -> Result<SystemReport, String> {
+    tauri::async_runtime::spawn_blocking(collect_system_report)
+        .await
+        .map_err(|error| format!("system inventory worker failed: {error}"))
+}
+
+#[tauri::command]
 async fn get_runtime_report(state: State<'_, AppState>) -> Result<Value, String> {
     state
         .runtime
         .bridge("doctor")
         .await
         .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn get_runtime_summary(state: State<'_, AppState>) -> Value {
+    state.runtime.summary()
 }
 
 #[tauri::command]
@@ -356,7 +524,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_catalog,
+            get_training_schema,
+            inspect_training_input,
+            validate_training_input,
+            save_training_input,
+            get_system_report,
             get_runtime_report,
+            get_runtime_summary,
             get_runtime_location,
             get_runtime_settings,
             set_runtime_settings,

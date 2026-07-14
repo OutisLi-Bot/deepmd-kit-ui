@@ -221,6 +221,16 @@ def _runtime_python(runtime: Path) -> Path:
     return runtime / ("python.exe" if os.name == "nt" else "bin/python3")
 
 
+def _studio_bridge() -> Path | None:
+    """Resolve the bridge shipped by the current application version."""
+    resource_root = Path(__file__).resolve().parent.parent
+    candidates = (
+        resource_root / "bridge" / "deepmd_ui_bridge.py",
+        resource_root / "python" / "deepmd_ui" / "bridge.py",
+    )
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
 def rebuild_runtime(base: Path, output: Path, plan: dict[str, Any]) -> dict[str, Any]:
     """Clone a runtime privately, overlay one source commit, and verify it."""
     base = base.resolve()
@@ -287,6 +297,14 @@ def rebuild_runtime(base: Path, output: Path, plan: dict[str, Any]) -> dict[str,
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
 
+        # The bridge is Studio UI protocol, not DeePMD runtime state. Keep a
+        # compatibility copy in managed runtimes, while desktop/TUI launches
+        # the application-owned copy directly.
+        if bridge_source := _studio_bridge():
+            bridge_target = site_packages / "deepmd_ui"
+            bridge_target.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bridge_source, bridge_target / "bridge.py")
+
     manifest_path = output / "deepmd-ui-runtime.json"
     manifest = (
         json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -324,6 +342,7 @@ def rebuild_runtime(base: Path, output: Path, plan: dict[str, Any]) -> dict[str,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     doctor = subprocess.run(
         [python, "-I", "-m", "deepmd_ui.bridge", "doctor"],
@@ -332,6 +351,7 @@ def rebuild_runtime(base: Path, output: Path, plan: dict[str, Any]) -> dict[str,
         env=_isolated_environment(),
         text=True,
         stdout=subprocess.PIPE,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     return {
         "schema_version": 1,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.metadata
 import importlib.util
 import json
@@ -24,6 +25,14 @@ from deepmd.main import (
     BACKEND_TABLE,
     main_parser,
 )
+
+_HIDDEN_WORKFLOWS = {
+    "convert-from",
+    "doc-train-input",
+    "gui",
+    "train-nvnmd",
+    "transfer",
+}
 
 try:
     from deepmd._version import version as DEEPMD_VERSION
@@ -118,42 +127,6 @@ _WORKFLOW_METADATA: dict[str, dict[str, Any]] = {
         "description": "Discover and manage built-in pretrained models.",
         "icon": "library",
         "accent": "orange",
-    },
-    "doc-train-input": {
-        "category": "Utilities",
-        "title": "Input reference",
-        "description": "Generate the authoritative training-input reference.",
-        "icon": "book-open-text",
-        "accent": "slate",
-    },
-    "transfer": {
-        "category": "Utilities",
-        "title": "Transfer parameters",
-        "description": "Transfer compatible TensorFlow parameters between models.",
-        "icon": "arrow-right-left",
-        "accent": "slate",
-    },
-    "convert-from": {
-        "category": "Utilities",
-        "title": "Upgrade model format",
-        "description": "Convert an older TensorFlow model to the current format.",
-        "icon": "file-up",
-        "accent": "slate",
-    },
-    "train-nvnmd": {
-        "category": "Advanced",
-        "title": "Train NVNMD",
-        "description": "Run the TensorFlow NVNMD training workflow.",
-        "icon": "cpu",
-        "accent": "slate",
-    },
-    "gui": {
-        "category": "Utilities",
-        "title": "Legacy DP-GUI server",
-        "description": "Launch the existing browser-based DP-GUI server.",
-        "icon": "panel-top-open",
-        "accent": "slate",
-        "legacy": True,
     },
 }
 
@@ -312,14 +285,13 @@ def build_catalog() -> dict[str, Any]:
     commands = [
         _serialize_parser(name, command_parser)
         for name, command_parser in subparsers.choices.items()
+        if name not in _HIDDEN_WORKFLOWS
     ]
     categories = [
         "Training",
         "Evaluate",
         "Models",
         "Data",
-        "Utilities",
-        "Advanced",
     ]
     backend_aliases: dict[str, list[str]] = {}
     for alias, backend in BACKEND_TABLE.items():
@@ -339,6 +311,104 @@ def build_catalog() -> dict[str, Any]:
         ],
         "commands": commands,
     }
+
+
+def build_training_schema() -> dict[str, Any]:
+    """Return the authoritative, version-matched training argument tree.
+
+    The dargs serialization retains hierarchy, variants, defaults, aliases,
+    required fields, and the documentation written in DeePMD's ``argcheck``.
+    NVNMD is deliberately omitted because DeePMD Studio ships modern Python
+    backends only.
+    """
+    from deepmd.utils.argcheck import gen_json
+
+    arguments = [
+        argument
+        for argument in json.loads(gen_json())
+        if argument.get("name") != "nvnmd"
+    ]
+    return {
+        "schema_version": 1,
+        "deepmd_version": DEEPMD_VERSION,
+        "arguments": arguments,
+    }
+
+
+def _training_summary(data: dict[str, Any]) -> dict[str, Any]:
+    model = data.get("model") or {}
+    training = data.get("training") or {}
+    training_data = training.get("training_data") or {}
+    systems = training_data.get("systems", ".")
+    if isinstance(systems, list):
+        system_count = len(systems)
+    elif systems:
+        system_count = 1
+    else:
+        system_count = 0
+    model_type = model.get("type", "standard")
+    descriptor = model.get("descriptor") or {}
+    if model_type == "standard":
+        model_label = descriptor.get("type", "standard")
+    else:
+        model_label = model_type
+    steps = next(
+        (
+            training[key]
+            for key in ("numb_steps", "num_steps", "num_step", "numb_step")
+            if key in training
+        ),
+        1_000_000,
+    )
+    optimizer = data.get("optimizer") or {}
+    return {
+        "model": model_label,
+        "model_type": model_type,
+        "optimizer": optimizer.get("type", "Adam"),
+        "steps": steps,
+        "systems": systems,
+        "system_count": system_count,
+    }
+
+
+def validate_training_input(request: dict[str, Any]) -> dict[str, Any]:
+    """Load or validate a training input with DeePMD's own argcheck logic."""
+    try:
+        if "path" in request:
+            from deepmd.common import j_loader
+
+            path = Path(str(request["path"])).expanduser().resolve()
+            data = j_loader(path)
+            source_path = str(path)
+            working_directory = str(path.parent)
+        else:
+            data = request.get("input")
+            source_path = None
+            working_directory = None
+        if not isinstance(data, dict):
+            raise TypeError("The training input must be a JSON/YAML object.")
+
+        from deepmd.utils.argcheck import normalize
+
+        multi_task = "model_dict" in (data.get("model") or {})
+        normalize(copy.deepcopy(data), multi_task=multi_task, check=True)
+        return {
+            "valid": True,
+            "error": None,
+            "input": data,
+            "summary": _training_summary(data),
+            "source_path": source_path,
+            "working_directory": working_directory,
+        }
+    except Exception as error:
+        return {
+            "valid": False,
+            "error": str(error),
+            "input": None,
+            "summary": None,
+            "source_path": request.get("path"),
+            "working_directory": None,
+        }
 
 
 def _backend_availability() -> list[dict[str, Any]]:
@@ -500,7 +570,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("catalog", "doctor"),
+        choices=("catalog", "doctor", "train-schema", "validate-input"),
         help="Bridge operation to perform.",
     )
     parser.add_argument(
@@ -519,10 +589,32 @@ def main(args: Sequence[str] | None = None) -> None:
     args : Sequence[str] or None, optional
         Command-line arguments. ``sys.argv`` is used when omitted.
     """
+    # Windows inherits a locale code page for redirected standard streams.
+    # Argcheck documentation contains scientific Unicode (for example Å),
+    # and request paths may contain non-ASCII characters, so the machine
+    # protocol must never depend on that process-global locale.
+    stdin_reconfigure = getattr(sys.stdin, "reconfigure", None)
+    if stdin_reconfigure is not None:
+        # ``utf-8-sig`` also accepts BOM-prefixed input emitted by Windows
+        # PowerShell while behaving like UTF-8 for Rust's BOM-free payloads.
+        stdin_reconfigure(encoding="utf-8-sig")
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
+
     namespace = _build_parser().parse_args(args)
-    payload = (
-        build_catalog() if namespace.command == "catalog" else build_runtime_report()
-    )
+    if namespace.command == "catalog":
+        payload = build_catalog()
+    elif namespace.command == "doctor":
+        payload = build_runtime_report()
+    elif namespace.command == "train-schema":
+        payload = build_training_schema()
+    else:
+        request = json.load(sys.stdin)
+        if not isinstance(request, dict):
+            raise TypeError("bridge request must be a JSON object")
+        payload = validate_training_input(request)
     json.dump(
         payload,
         sys.stdout,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 export type JsonScalar = string | number | boolean | null;
+export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
 export type FieldValue = string | boolean;
 export type ViewId = "home" | "workbench" | "tasks" | "runtime";
 export type TaskStatus =
@@ -56,6 +57,51 @@ export interface CommandCatalog {
   commands: Workflow[];
 }
 
+export interface InputVariant {
+  object: "Variant";
+  flag_name: string;
+  optional: boolean;
+  default_tag: string;
+  choice_dict: Record<string, InputArgument>;
+}
+
+export interface InputArgument {
+  object: "Argument";
+  name: string;
+  type: string[];
+  optional: boolean;
+  alias: string[];
+  doc: string;
+  repeat: boolean;
+  sub_fields: Record<string, InputArgument>;
+  sub_variants: Record<string, InputVariant>;
+  default?: JsonValue;
+}
+
+export interface TrainingInputSchema {
+  schema_version: number;
+  deepmd_version: string;
+  arguments: InputArgument[];
+}
+
+export interface TrainingInputSummary {
+  model: string;
+  model_type: string;
+  optimizer: string;
+  steps: number;
+  systems: string | string[];
+  system_count: number;
+}
+
+export interface TrainingInputInspection {
+  valid: boolean;
+  error: string | null;
+  input: Record<string, JsonValue> | null;
+  summary: TrainingInputSummary | null;
+  source_path: string | null;
+  working_directory: string | null;
+}
+
 export interface BackendReport {
   id: string;
   package: string | null;
@@ -89,6 +135,7 @@ export interface RuntimeReport {
     }>;
     torch_version?: string;
     cuda_version?: string | null;
+    probing?: boolean;
     error?: string;
   };
   triton: {
@@ -97,6 +144,7 @@ export interface RuntimeReport {
     version?: string;
     distribution?: string;
     driver_error?: string;
+    probing?: boolean;
     error?: string;
   };
   runtime_manifest?: {
@@ -117,6 +165,36 @@ export interface RuntimeReport {
 export interface RuntimeLocation {
   executable: string;
   source: "bundled" | "managed";
+}
+
+export interface SystemReport {
+  operatingSystem: {
+    name: string;
+    version: string;
+    kernel: string;
+    hostname: string;
+    architecture: string;
+  };
+  cpu: {
+    brand: string;
+    vendor: string;
+    physicalCores: number;
+    logicalCores: number;
+    frequencyMhz: number;
+  };
+  memory: {
+    totalBytes: number;
+    availableBytes: number;
+  };
+  disks: Array<{
+    name: string;
+    mountPoint: string;
+    fileSystem: string;
+    kind: string;
+    totalBytes: number;
+    availableBytes: number;
+    removable: boolean;
+  }>;
 }
 
 export type RuntimeChannel = "stable" | "beta" | "custom";

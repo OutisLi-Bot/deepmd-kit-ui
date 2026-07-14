@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-import { ArrowRight, CheckCircle2, FolderOpen, Gauge, Layers3, Play, Zap } from "lucide-react";
+import { ArrowRight, CheckCircle2, Cpu, FolderOpen, Gauge, HardDrive, Layers3, LoaderCircle, MemoryStick, Play, Zap } from "lucide-react";
+import { useState } from "react";
 
 import { chooseInputPath } from "../lib/studio";
-import type { CommandCatalog, RuntimeReport, TaskSnapshot, Workflow } from "../types";
+import type { CommandCatalog, RuntimeReport, SystemReport, TaskSnapshot, Workflow } from "../types";
 import { WorkflowIcon } from "../components/Icons";
 import { StatusBadge } from "../components/TaskConsole";
+import { formatBytes, SystemDetailsModal } from "../components/SystemDetailsModal";
 
 interface DashboardProps {
   catalog: CommandCatalog;
   runtime: RuntimeReport;
+  systemReport: SystemReport | null;
   tasks: TaskSnapshot[];
   workingDirectory: string;
   onWorkingDirectory: (path: string) => void;
@@ -18,13 +21,10 @@ interface DashboardProps {
   onShowRuntime: () => void;
 }
 
-function formatMemory(bytes: number): string {
-  return `${(bytes / 1024 ** 3).toFixed(0)} GB`;
-}
-
 export function Dashboard({
   catalog,
   runtime,
+  systemReport,
   tasks,
   workingDirectory,
   onWorkingDirectory,
@@ -32,8 +32,10 @@ export function Dashboard({
   onShowTasks,
   onShowRuntime,
 }: DashboardProps) {
+  const [showSystemDetails, setShowSystemDetails] = useState(false);
   const featured = catalog.commands.filter((workflow) => workflow.featured).slice(0, 3);
   const accelerator = runtime.accelerator.devices.at(0);
+  const probing = Boolean(runtime.accelerator.probing);
 
   async function browseProject(): Promise<void> {
     const path = await chooseInputPath(true);
@@ -130,22 +132,24 @@ export function Dashboard({
             </div>
             <button className="icon-button" type="button" onClick={onShowRuntime} title="Runtime details"><Gauge size={17} /></button>
           </div>
-          <div className="runtime-summary-card">
+          <button className="runtime-summary-card clickable" type="button" onClick={() => setShowSystemDetails(true)}>
             <span className="gpu-glyph"><Zap size={19} fill="currentColor" /></span>
             <div>
-              <small>{runtime.accelerator.kind.toUpperCase()} accelerator</small>
-              <strong>{accelerator?.name ?? "CPU"}</strong>
-              <span>{accelerator ? formatMemory(accelerator.memory_bytes) : runtime.platform.machine}</span>
+              <small>{probing ? "Detecting accelerator" : `${runtime.accelerator.kind.toUpperCase()} accelerator`}</small>
+              <strong>{probing ? "Checking local hardware…" : accelerator?.name ?? "CPU"}</strong>
+              <span>{probing ? "Workbench is ready" : accelerator ? `${formatBytes(accelerator.memory_bytes)} VRAM` : runtime.platform.machine}</span>
             </div>
-            <CheckCircle2 className="runtime-check" size={18} />
-          </div>
-          <dl className="runtime-facts">
-            <div><dt>Python</dt><dd>{runtime.python.version}</dd></div>
-            <div><dt>PyTorch</dt><dd>{runtime.accelerator.torch_version ?? "Not installed"}</dd></div>
-            <div><dt>Available backends</dt><dd>{runtime.backends.filter((item) => item.available).length}</dd></div>
+            {probing ? <LoaderCircle className="runtime-check spin" size={18} /> : <CheckCircle2 className="runtime-check" size={18} />}
+          </button>
+          <dl className="runtime-facts hardware-facts">
+            <div title={systemReport?.cpu.brand}><dt><Cpu size={12} /> CPU</dt><dd>{systemReport?.cpu.brand || "Detecting…"}</dd></div>
+            <div><dt><MemoryStick size={12} /> Memory</dt><dd>{systemReport ? formatBytes(systemReport.memory.totalBytes) : "—"}</dd></div>
+            <div><dt><HardDrive size={12} /> Storage</dt><dd>{systemReport ? formatBytes(systemReport.disks.reduce((total, disk) => total + disk.totalBytes, 0)) : "—"}</dd></div>
           </dl>
+          <button className="system-details-link" type="button" onClick={() => setShowSystemDetails(true)}>View machine configuration <ArrowRight size={13} /></button>
         </section>
       </div>
+      {showSystemDetails && <SystemDetailsModal report={systemReport} runtime={runtime} onClose={() => setShowSystemDetails(false)} />}
     </div>
   );
 }

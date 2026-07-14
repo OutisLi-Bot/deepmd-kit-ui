@@ -21,7 +21,31 @@ PyTorch and uses an NVIDIA GPU when one is available, otherwise it falls back
 to CPU. macOS uses the bundled PyTorch build and can use MPS/Metal. No system
 CUDA toolkit or Conda installation is required.
 
+The machine bridge is owned by the current Studio application rather than by
+the mutable scientific runtime. Updating Studio therefore updates workflows
+and input-building behavior immediately, even when an older application-managed
+runtime remains active.
+
 TensorFlow and LAMMPS are deliberately excluded from the current profile.
+Legacy Utilities and NVNMD training are not exposed by Studio.
+
+The interface embeds Maple Mono NF CN Regular and uses it for all UI, form,
+documentation, and console text. The font is distributed under the SIL Open
+Font License 1.1; its license is included with every packaged application.
+
+## Guided training inputs
+
+The Training workspace has two entry points. Existing JSON, YAML, and YML
+files can be selected with the native file picker and are checked by DeePMD's
+strict `argcheck` before training. The guided builder loads the complete,
+version-matched argument hierarchy and documentation lazily from the bundled
+DeePMD runtime, then presents model, dataset, optimizer, loss, validation, and
+advanced settings as progressive controls. Generated input is validated again
+before it can be saved or run.
+
+The Overview page shows a concise local-machine summary. Its configuration
+dialog reports CPU, memory, GPU/VRAM, Windows or macOS details, storage, and the
+application-private DeePMD/PyTorch/Triton stack without consulting local Conda.
 
 ## DeePMD runtime channels
 

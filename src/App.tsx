@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-import { AlertTriangle, Moon, RefreshCw, Sun, Zap } from "lucide-react";
+import { AlertTriangle, LoaderCircle, Moon, RefreshCw, Sun, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DeePMDMark } from "./components/Icons";
@@ -11,6 +11,8 @@ import {
   getDefaultWorkingDirectory,
   getRuntimeLocation,
   getRuntimeReport,
+  getRuntimeSummary,
+  getSystemReport,
   listTasks,
   startTask,
   subscribeToTaskEvents,
@@ -21,6 +23,7 @@ import type {
   ProcessEvent,
   RuntimeLocation,
   RuntimeReport,
+  SystemReport,
   TaskSnapshot,
   ViewId,
   Workflow,
@@ -28,6 +31,7 @@ import type {
 import { Dashboard } from "./views/Dashboard";
 import { Runtime } from "./views/Runtime";
 import { Tasks } from "./views/Tasks";
+import { TrainingWorkbench } from "./views/TrainingWorkbench";
 import { Workbench } from "./views/Workbench";
 
 interface AppData {
@@ -36,6 +40,7 @@ interface AppData {
   location: RuntimeLocation;
   tasks: TaskSnapshot[];
   workingDirectory: string;
+  systemReport: SystemReport | null;
 }
 
 function applyProcessEvent(tasks: TaskSnapshot[], event: ProcessEvent): TaskSnapshot[] {
@@ -80,16 +85,42 @@ export default function App() {
     try {
       const [catalog, runtime, location, tasks, workingDirectory] = await Promise.all([
         getCatalog(),
-        getRuntimeReport(),
+        getRuntimeSummary(),
         getRuntimeLocation(),
         listTasks(),
         getDefaultWorkingDirectory(),
       ]);
-      setData({ catalog, runtime, location, tasks, workingDirectory });
+      setData({ catalog, runtime, location, tasks, workingDirectory, systemReport: null });
       const preferred = ["pytorch", "pytorch-exportable", "jax", "dpmodel"].find((candidate) =>
         runtime.backends.some((item) => item.id === candidate && item.available),
       );
       if (preferred) setBackend(preferred);
+      window.setTimeout(() => {
+        void getSystemReport()
+          .then((systemReport) => {
+            setData((current) => current ? { ...current, systemReport } : current);
+          })
+          .catch(() => undefined);
+        void getRuntimeReport()
+          .then((report) => {
+            setData((current) => current ? { ...current, runtime: report } : current);
+            const detected = ["pytorch", "pytorch-exportable", "jax", "dpmodel"].find((candidate) =>
+              report.backends.some((item) => item.id === candidate && item.available),
+            );
+            if (detected) setBackend(detected);
+          })
+          .catch((reason: unknown) => {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            setData((current) => current ? {
+              ...current,
+              runtime: {
+                ...current.runtime,
+                accelerator: { ...current.runtime.accelerator, probing: false, error: message },
+                triton: { ...current.runtime.triton, probing: false },
+              },
+            } : current);
+          });
+      }, 50);
     } catch (error) {
       setFatalError(error instanceof Error ? error.message : String(error));
     }
@@ -145,7 +176,7 @@ export default function App() {
       <div className="splash-screen">
         <DeePMDMark size={44} />
         <strong>DeePMD Studio</strong>
-        <span><RefreshCw className="spin" size={14} /> Inspecting local runtime…</span>
+        <span><RefreshCw className="spin" size={14} /> Loading workbench…</span>
       </div>
     );
   }
@@ -178,7 +209,11 @@ export default function App() {
           <div className="topbar-title"><span>DeePMD Studio</span><i>/</i><strong>{pageTitle}</strong></div>
           <div className="topbar-actions">
             {runningCount > 0 && <button className="running-chip" type="button" onClick={() => setView("tasks")}><span /><strong>{runningCount}</strong> running</button>}
-            <span className="accelerator-chip"><Zap size={13} fill="currentColor" /> {data.runtime.accelerator.kind.toUpperCase()}</span>
+            {data.runtime.accelerator.probing ? (
+              <span className="accelerator-chip"><LoaderCircle className="spin" size={13} /> Detecting GPU</span>
+            ) : (
+              <span className="accelerator-chip"><Zap size={13} fill="currentColor" /> {data.runtime.accelerator.kind.toUpperCase()}</span>
+            )}
             <button className="icon-button theme-button" type="button" onClick={() => setTheme((current) => current === "light" ? "dark" : "light")} title={`Use ${theme === "light" ? "dark" : "light"} theme`}>
               {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
             </button>
@@ -190,6 +225,7 @@ export default function App() {
             <Dashboard
               catalog={data.catalog}
               runtime={data.runtime}
+              systemReport={data.systemReport}
               tasks={data.tasks}
               workingDirectory={data.workingDirectory}
               onWorkingDirectory={(workingDirectory) => setData({ ...data, workingDirectory })}
@@ -198,7 +234,19 @@ export default function App() {
               onShowRuntime={() => setView("runtime")}
             />
           )}
-          {view === "workbench" && workflow && (
+          {view === "workbench" && workflow?.name === "train" && (
+            <TrainingWorkbench
+              workflow={workflow}
+              backends={data.catalog.backends}
+              runtime={data.runtime}
+              backend={backend}
+              workingDirectory={data.workingDirectory}
+              onBackend={setBackend}
+              onWorkingDirectory={(workingDirectory) => setData({ ...data, workingDirectory })}
+              onRun={run}
+            />
+          )}
+          {view === "workbench" && workflow && workflow.name !== "train" && (
             <Workbench
               workflow={workflow}
               backends={data.catalog.backends}

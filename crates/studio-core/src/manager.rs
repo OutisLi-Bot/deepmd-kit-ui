@@ -286,7 +286,7 @@ async fn run_manager<const N: usize>(
             manager_script.display()
         ));
     }
-    let mut command = Command::new(runtime.executable());
+    let mut command = Command::new(runtime.background_executable());
     command
         .arg("-I")
         .arg(manager_script)

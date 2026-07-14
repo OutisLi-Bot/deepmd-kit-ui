@@ -27,6 +27,7 @@ deepmd-studio-core = { path = "../crates/studio-core" }
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sysinfo.workspace = true
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-opener = "2.5.3"

@@ -52,6 +52,12 @@ def test_application_versions_compare_numerically() -> None:
     )
 
 
+def test_current_application_bridge_is_resolved() -> None:
+    assert RUNTIME_MANAGER._studio_bridge() == (
+        SCRIPT.parents[1] / "python" / "deepmd_ui" / "bridge.py"
+    )
+
+
 def test_application_update_manifest_is_resolved(monkeypatch) -> None:
     manifest = {
         "schema_version": 1,

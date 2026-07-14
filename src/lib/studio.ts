@@ -16,9 +16,14 @@ import type {
   RuntimePlan,
   RuntimeReport,
   RuntimeSettings,
+  SystemReport,
   TaskSnapshot,
+  TrainingInputInspection,
+  TrainingInputSchema,
+  JsonValue,
   Workflow,
 } from "../types";
+import { mockTrainingSchema } from "./mockTrainingSchema";
 
 export const isDesktop = typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -77,7 +82,7 @@ function mockWorkflow(
 const mockCatalog: CommandCatalog = {
   schema_version: 1,
   deepmd_version: "3.1.4.dev",
-  categories: ["Training", "Evaluate", "Models", "Data", "Utilities", "Advanced"],
+  categories: ["Training", "Evaluate", "Models", "Data"],
   backends: [
     { id: "pytorch", aliases: ["pt", "pytorch"], flag: "--pt", available: true },
     { id: "pytorch-exportable", aliases: ["pt-expt"], flag: "--pt-expt", available: true },
@@ -160,11 +165,6 @@ const mockCatalog: CommandCatalog = {
     mockWorkflow("convert-backend", "Models", "Convert backend", "Convert a portable model to another backend.", "repeat-2", "violet"),
     mockWorkflow("pretrained", "Models", "Pretrained models", "Discover and manage pretrained models.", "library", "orange"),
     mockWorkflow("neighbor-stat", "Data", "Neighbor statistics", "Calculate distances and neighbor counts.", "radar", "teal"),
-    mockWorkflow("doc-train-input", "Utilities", "Input reference", "Generate the authoritative training input reference.", "book-open-text", "slate"),
-    mockWorkflow("transfer", "Utilities", "Transfer parameters", "Transfer compatible parameters between models.", "arrow-right-left", "slate"),
-    mockWorkflow("convert-from", "Utilities", "Upgrade model format", "Upgrade a legacy model to the current format.", "file-up", "slate"),
-    mockWorkflow("train-nvnmd", "Advanced", "Train NVNMD", "Run the NVNMD training workflow.", "cpu", "slate"),
-    mockWorkflow("gui", "Advanced", "Legacy DP-GUI server", "Launch the legacy browser interface.", "panel-top-open", "slate"),
   ],
 };
 
@@ -201,6 +201,35 @@ const mockRuntime: RuntimeReport = {
   },
 };
 
+const mockSystemReport: SystemReport = {
+  operatingSystem: {
+    name: "Windows",
+    version: "Windows 11 Pro 24H2",
+    kernel: "10.0.26100",
+    hostname: "workstation",
+    architecture: "x86_64",
+  },
+  cpu: {
+    brand: "AMD Ryzen AI 9 HX 370",
+    vendor: "AuthenticAMD",
+    physicalCores: 12,
+    logicalCores: 24,
+    frequencyMhz: 2000,
+  },
+  memory: { totalBytes: 64 * 1024 ** 3, availableBytes: 41 * 1024 ** 3 },
+  disks: [
+    {
+      name: "NVMe SSD",
+      mountPoint: "C:\\",
+      fileSystem: "NTFS",
+      kind: "SSD",
+      totalBytes: 2 * 1024 ** 4,
+      availableBytes: 1.24 * 1024 ** 4,
+      removable: false,
+    },
+  ],
+};
+
 let mockRuntimeSettings: RuntimeSettings = {
   channel: "stable",
   repository: "https://github.com/deepmodeling/deepmd-kit.git",
@@ -223,8 +252,66 @@ export async function getCatalog(): Promise<CommandCatalog> {
   return isDesktop ? invoke<CommandCatalog>("get_catalog") : mockCatalog;
 }
 
+export async function getTrainingSchema(): Promise<TrainingInputSchema> {
+  return isDesktop ? invoke<TrainingInputSchema>("get_training_schema") : mockTrainingSchema;
+}
+
+function summarizeTrainingInput(input: Record<string, JsonValue>): TrainingInputInspection {
+  const model = (input.model ?? {}) as Record<string, JsonValue>;
+  const training = (input.training ?? {}) as Record<string, JsonValue>;
+  const trainingData = (training.training_data ?? {}) as Record<string, JsonValue>;
+  const systems = (trainingData.systems ?? ".") as string | string[];
+  const modelType = String(model.type ?? "standard");
+  const descriptor = (model.descriptor ?? {}) as Record<string, JsonValue>;
+  return {
+    valid: Boolean(input.model && input.training && training.training_data),
+    error: input.model && input.training && training.training_data ? null : "model and training.training_data are required",
+    input,
+    summary: {
+      model: modelType === "standard" ? String(descriptor.type ?? "standard") : modelType,
+      model_type: modelType,
+      optimizer: String(((input.optimizer ?? {}) as Record<string, JsonValue>).type ?? "Adam"),
+      steps: Number(training.numb_steps ?? 1_000_000),
+      systems,
+      system_count: Array.isArray(systems) ? systems.length : systems ? 1 : 0,
+    },
+    source_path: null,
+    working_directory: null,
+  };
+}
+
+export async function inspectTrainingInput(path: string): Promise<TrainingInputInspection> {
+  if (isDesktop) return invoke<TrainingInputInspection>("inspect_training_input", { path });
+  const result = summarizeTrainingInput({
+    model: { type: "dpa4", descriptor: { type: "dpa4" }, fitting_net: { type: "dpa4_ener" } },
+    training: { training_data: { systems: ["data\\water"] }, numb_steps: 100_000 },
+    optimizer: { type: "AdamW" },
+  });
+  return { ...result, source_path: path, working_directory: "C:\\Projects\\water-dpa4" };
+}
+
+export async function validateTrainingInput(input: Record<string, JsonValue>): Promise<TrainingInputInspection> {
+  return isDesktop
+    ? invoke<TrainingInputInspection>("validate_training_input", { input })
+    : summarizeTrainingInput(input);
+}
+
+export async function saveTrainingInput(path: string, input: Record<string, JsonValue>): Promise<string> {
+  if (isDesktop) return invoke<string>("save_training_input", { path, input });
+  return path.toLowerCase().endsWith(".json") ? path : `${path}.json`;
+}
+
+export async function getSystemReport(): Promise<SystemReport> {
+  return isDesktop ? invoke<SystemReport>("get_system_report") : mockSystemReport;
+}
+
 export async function getRuntimeReport(): Promise<RuntimeReport> {
   return isDesktop ? invoke<RuntimeReport>("get_runtime_report") : mockRuntime;
+}
+
+export async function getRuntimeSummary(): Promise<RuntimeReport> {
+  if (!isDesktop) return mockRuntime;
+  return invoke<RuntimeReport>("get_runtime_summary");
 }
 
 export async function getRuntimeLocation(): Promise<RuntimeLocation> {
@@ -414,6 +501,34 @@ export async function chooseInputPath(directory = false): Promise<string | null>
   if (!isDesktop) return window.prompt("Path", directory ? "C:\\Projects\\water" : "input.json");
   const selection = await open({ directory, multiple: false });
   return typeof selection === "string" ? selection : null;
+}
+
+export async function chooseTrainingInput(): Promise<string | null> {
+  if (!isDesktop) return window.prompt("Training input", "C:\\Projects\\water-dpa4\\input.json");
+  const selection = await open({
+    directory: false,
+    multiple: false,
+    filters: [{ name: "DeePMD input", extensions: ["json", "yaml", "yml"] }],
+  });
+  return typeof selection === "string" ? selection : null;
+}
+
+export async function chooseSystemDirectories(): Promise<string[]> {
+  if (!isDesktop) {
+    const value = window.prompt("Dataset folders (one per line)", "C:\\Projects\\water-dpa4\\data");
+    return value ? value.split(/\r?\n/).filter(Boolean) : [];
+  }
+  const selection = await open({ directory: true, multiple: true });
+  if (typeof selection === "string") return [selection];
+  return Array.isArray(selection) ? selection : [];
+}
+
+export async function chooseTrainingOutput(defaultPath: string): Promise<string | null> {
+  if (!isDesktop) return window.prompt("Save generated input", defaultPath);
+  return save({
+    defaultPath,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
 }
 
 export async function chooseOutputPath(defaultPath?: string): Promise<string | null> {

@@ -7,11 +7,13 @@ from deepmd.main import (
 from deepmd_ui.bridge import (
     build_catalog,
     build_runtime_report,
+    build_training_schema,
+    validate_training_input,
 )
 
 
-def test_catalog_covers_every_deepmd_command() -> None:
-    """The Studio catalog stays in sync with the authoritative CLI parser."""
+def test_catalog_covers_supported_deepmd_commands() -> None:
+    """The Studio catalog stays in sync while omitting legacy utilities."""
     parser = main_parser()
     subparser_action = next(
         action
@@ -20,7 +22,9 @@ def test_catalog_covers_every_deepmd_command() -> None:
     )
     catalog = build_catalog()
     catalog_commands = {command["name"] for command in catalog["commands"]}
-    assert catalog_commands == set(subparser_action.choices)
+    hidden = {"convert-from", "doc-train-input", "gui", "train-nvnmd", "transfer"}
+    assert catalog_commands == set(subparser_action.choices) - hidden
+    assert catalog["categories"] == ["Training", "Evaluate", "Models", "Data"]
 
 
 def test_catalog_exposes_train_form_fields() -> None:
@@ -63,3 +67,33 @@ def test_runtime_report_is_structured() -> None:
     assert report["runtime_manifest"] is None or isinstance(
         report["runtime_manifest"], dict
     )
+
+
+def test_training_schema_is_argcheck_driven_without_nvnmd() -> None:
+    schema = build_training_schema()
+    arguments = {argument["name"]: argument for argument in schema["arguments"]}
+    assert "model" in arguments
+    assert "training" in arguments
+    assert "nvnmd" not in arguments
+    model_types = arguments["model"]["sub_variants"]["type"]["choice_dict"]
+    assert "dpa4" in model_types
+
+
+def test_generated_training_input_is_validated_by_argcheck() -> None:
+    result = validate_training_input(
+        {
+            "input": {
+                "model": {
+                    "type": "dpa4",
+                    "descriptor": {"type": "dpa4"},
+                    "fitting_net": {"type": "dpa4_ener"},
+                },
+                "training": {
+                    "training_data": {"systems": "."},
+                    "numb_steps": 1,
+                },
+            }
+        }
+    )
+    assert result["valid"] is True
+    assert result["summary"]["model"] == "dpa4"

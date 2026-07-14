@@ -71,6 +71,7 @@ function updateSetting<K extends keyof RuntimeSettings>(
 }
 
 export function Runtime({ report, location }: RuntimeProps) {
+  const probing = Boolean(report.accelerator.probing);
   const [settings, setSettings] = useState<RuntimeSettings | null>(null);
   const [plan, setPlan] = useState<RuntimePlan | null>(null);
   const [installResult, setInstallResult] = useState<RuntimeInstallResult | null>(null);
@@ -180,7 +181,7 @@ export function Runtime({ report, location }: RuntimeProps) {
           <h1>Runtime</h1>
           <p>The isolated Python toolchain, compute backends, and source revision used by DeePMD Studio.</p>
         </div>
-        <span className="runtime-ready"><Check size={14} /> Healthy</span>
+        <span className="runtime-ready">{probing ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} {probing ? "Inspecting" : "Healthy"}</span>
       </header>
 
       <div className="diagnostic-grid">
@@ -194,7 +195,7 @@ export function Runtime({ report, location }: RuntimeProps) {
         </section>
         <section className="diagnostic-card">
           <span className="diagnostic-icon emerald"><Zap size={21} /></span>
-          <div><small>Accelerator</small><strong>{report.accelerator.devices.at(0)?.name ?? "CPU"}</strong><span>{report.accelerator.available ? `${report.accelerator.kind.toUpperCase()} ready` : "CPU execution"}</span></div>
+          <div><small>Accelerator</small><strong>{probing ? "Detecting hardware…" : report.accelerator.devices.at(0)?.name ?? "CPU"}</strong><span>{probing ? "Background inspection" : report.accelerator.available ? `${report.accelerator.kind.toUpperCase()} ready` : "CPU execution"}</span></div>
         </section>
       </div>
 
@@ -364,7 +365,7 @@ export function Runtime({ report, location }: RuntimeProps) {
 
         <section className="runtime-detail-card">
           <div className="panel-heading"><div><p className="eyebrow">Hardware</p><h2>Accelerators</h2></div><Zap size={18} /></div>
-          {report.accelerator.devices.length ? report.accelerator.devices.map((device) => (
+          {probing ? <div className="empty-state compact"><span><LoaderCircle className="spin" size={20} /></span><strong>Inspecting accelerator</strong><p>The workbench remains available while PyTorch initializes.</p></div> : report.accelerator.devices.length ? report.accelerator.devices.map((device) => (
             <div className="device-card" key={device.index}>
               <div className="device-visual"><span>{report.accelerator.kind.toUpperCase()}</span><Zap size={26} fill="currentColor" /></div>
               <div><small>Device {device.index}</small><strong>{device.name}</strong><span>{formatMemory(device.memory_bytes)} memory</span></div>

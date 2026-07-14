@@ -36,7 +36,9 @@
     "longDescription": "A modern desktop workbench for the complete DeePMD-kit Python toolchain.",
     "resources": {
       "resources/runtime": "runtime",
-      "../scripts/runtime_manager.py": "runtime-manager/runtime_manager.py"
+      "../scripts/runtime_manager.py": "runtime-manager/runtime_manager.py",
+      "../python/deepmd_ui/bridge.py": "bridge/deepmd_ui_bridge.py",
+      "../src/assets/fonts/MapleMono-LICENSE.txt": "licenses/MapleMono-LICENSE.txt"
     },
     "externalBin": [
       "binaries/dpstudio"
