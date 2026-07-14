@@ -1,0 +1,230 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+name: Build DeePMD Studio
+
+on:
+  workflow_dispatch:
+    inputs:
+      deepmd_repository:
+        description: Git repository URL containing DeePMD-kit
+        required: true
+        default: https://github.com/deepmodeling/deepmd-kit.git
+      deepmd_ref:
+        description: Branch, tag, or commit to package
+        required: true
+        default: master
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  DEEPMD_REPOSITORY: ${{ inputs.deepmd_repository || 'https://github.com/deepmodeling/deepmd-kit.git' }}
+  DEEPMD_REF: ${{ inputs.deepmd_ref || 'master' }}
+
+jobs:
+  bundle:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86-64 CUDA 13
+            os: windows-2022
+            cibw_build: cp311-win_amd64
+            rust_target: x86_64-pc-windows-msvc
+            runtime_platform: windows
+            accelerator: cu130
+            dp_variant: cpu
+            bundle: inno
+            artifact: windows-x86_64-cuda13
+          - name: macOS Apple Silicon
+            os: macos-14
+            cibw_build: cp311-macosx_arm64
+            rust_target: aarch64-apple-darwin
+            runtime_platform: macos
+            accelerator: cpu
+            dp_variant: cpu
+            bundle: dmg
+            artifact: macos-arm64
+          - name: macOS Intel
+            os: macos-15-intel
+            cibw_build: cp311-macosx_x86_64
+            rust_target: x86_64-apple-darwin
+            runtime_platform: macos
+            accelerator: cpu
+            dp_variant: cpu
+            bundle: dmg
+            artifact: macos-x86_64
+          - name: Linux x86-64 CUDA 13
+            os: ubuntu-24.04
+            cibw_build: cp311-manylinux_x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            runtime_platform: linux
+            accelerator: cu130
+            dp_variant: cuda
+            cuda_version: "12.8"
+            bundle: deb,appimage
+            artifact: linux-x86_64-cuda13
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set version from release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: python scripts/set_version.py "${GITHUB_REF_NAME#v}"
+
+      - name: Resolve DeePMD source
+        id: deepmd
+        shell: bash
+        run: |
+          git clone --filter=blob:none --no-checkout "$DEEPMD_REPOSITORY" vendor/deepmd-kit
+          git -C vendor/deepmd-kit fetch --depth 1 origin "$DEEPMD_REF"
+          git -C vendor/deepmd-kit checkout --detach FETCH_HEAD
+          echo "commit=$(git -C vendor/deepmd-kit rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.11.28"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux desktop build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
+      - name: Build selected DeePMD-kit wheel
+        uses: pypa/cibuildwheel@v3.4.1
+        with:
+          package-dir: vendor/deepmd-kit
+          output-dir: wheelhouse
+        env:
+          CIBW_BUILD: ${{ matrix.cibw_build }}
+          CIBW_ARCHS: native
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_TEST_COMMAND: ""
+          CIBW_TEST_EXTRAS: ""
+          CIBW_BUILD_FRONTEND: "build[uv]"
+          CIBW_ENVIRONMENT: >-
+            DP_ENABLE_TENSORFLOW=0
+            DP_ENABLE_PYTORCH=1
+            DP_ENABLE_PADDLE=0
+            DP_ENABLE_IPI=0
+            DP_LAMMPS_VERSION=
+            UV_TORCH_BACKEND=cpu
+          UV_TORCH_BACKEND: cpu
+          DP_VARIANT: ${{ matrix.dp_variant }}
+          CUDA_VERSION: ${{ matrix.cuda_version }}
+
+      - name: Reclaim cibuildwheel container space
+        if: runner.os == 'Linux'
+        run: docker system prune --all --force
+
+      - name: Assemble isolated Python runtime
+        shell: bash
+        run: |
+          wheel="$(find wheelhouse -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          python scripts/build_runtime.py \
+            --uv "$(command -v uv)" \
+            --wheel "$wheel" \
+            --python-version 3.11 \
+            --profile core \
+            --platform "${{ matrix.runtime_platform }}" \
+            --accelerator "${{ matrix.accelerator }}" \
+            --deepmd-repository "$DEEPMD_REPOSITORY" \
+            --deepmd-ref "$DEEPMD_REF" \
+            --deepmd-commit "${{ steps.deepmd.outputs.commit }}"
+
+      - name: Install UI dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build non-Windows installer and TUI
+        if: runner.os != 'Windows'
+        env:
+          DPMD_STUDIO_TARGET: ${{ matrix.rust_target }}
+        run: pnpm tauri build --target ${{ matrix.rust_target }} --bundles ${{ matrix.bundle }}
+
+      - name: Build Windows application and TUI
+        if: runner.os == 'Windows'
+        env:
+          DPMD_STUDIO_TARGET: ${{ matrix.rust_target }}
+        run: pnpm tauri build --target ${{ matrix.rust_target }} --no-bundle
+
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build single-file offline Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/build_windows_installer.ps1 -TargetTriple "${{ matrix.rust_target }}"
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: deepmd-kit-ui-${{ matrix.artifact }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            target/${{ matrix.rust_target }}/release/bundle/**/*.exe
+            target/${{ matrix.rust_target }}/release/bundle/**/*.dmg
+            target/${{ matrix.rust_target }}/release/bundle/**/*.AppImage
+            target/${{ matrix.rust_target }}/release/bundle/**/*.deb
+            target/${{ matrix.rust_target }}/release/bundle/**/SHA256SUMS.json
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+      - name: Generate in-app update manifest
+        shell: bash
+        run: |
+          python scripts/generate_update_manifest.py \
+            --root release-assets \
+            --version "${GITHUB_REF_NAME#v}" \
+            --tag "$GITHUB_REF_NAME" \
+            --output release-assets/update-manifest.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/**/*

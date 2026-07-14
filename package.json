@@ -1,0 +1,35 @@
+{
+  "name": "deepmd-kit-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "LGPL-3.0-or-later",
+  "scripts": {
+    "dev": "vite --port 1420",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "preview": "vite preview --port 1420",
+    "prepare:sidecar": "node scripts/prepare-sidecar.mjs release",
+    "prepare:sidecar:debug": "node scripts/prepare-sidecar.mjs debug",
+    "prepare:tauri": "pnpm build && pnpm prepare:sidecar",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.1",
+    "@tauri-apps/plugin-opener": "2.5.3",
+    "lucide-react": "1.24.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
+  }
+}

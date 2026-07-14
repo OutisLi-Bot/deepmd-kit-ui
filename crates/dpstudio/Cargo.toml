@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
+[package]
+name = "dpstudio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "DeePMD Studio TUI and agent-friendly command line"
+
+[[bin]]
+name = "dpstudio"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+crossterm.workspace = true
+deepmd-studio-core = { path = "../studio-core" }
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shell-words.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true

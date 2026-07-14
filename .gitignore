@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
+/dist/
+/target/
+/node_modules/
+/src-tauri/gen/
+/src-tauri/binaries/*
+!/src-tauri/binaries/.gitkeep
+/src-tauri/resources/runtime/*
+!/src-tauri/resources/runtime/README.md
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.ruff_cache/
+*.tsbuildinfo
