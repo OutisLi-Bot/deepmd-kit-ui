@@ -1,0 +1,6 @@
+<!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
+<!-- Square rendering wrapper around the official DeePMD-kit wordmark. -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1238 1238">
+  <rect width="1238" height="1238" fill="#ffffff"/>
+  <image href="../../assets/branding/logo.svg" xlink:href="../../assets/branding/logo.svg" x="0" y="411.5" width="1238" height="415"/>
+</svg>
