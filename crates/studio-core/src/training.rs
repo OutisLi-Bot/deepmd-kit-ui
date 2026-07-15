@@ -27,6 +27,10 @@ static METRIC_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 static STEP_TIME_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bavg\s*=\s*([0-9.eE+-]+)\s*s/step").expect("valid step-time expression")
 });
+static WALL_TIME_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\btotal\s+wall\s+time\s*=\s*([0-9.eE+-]+)\s*s")
+        .expect("valid wall-time expression")
+});
 static ETA_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\beta\s*=\s*(?:(\d+)\s+days?,\s*)?(\d{1,2}):(\d{2}):(\d{2})")
         .expect("valid ETA expression")
@@ -106,6 +110,10 @@ impl TrainingSnapshot {
     /// Update progress, ETA, and dynamic metric history from one output line.
     pub fn apply_log_line(&mut self, line: &str) -> bool {
         let mut changed = false;
+        let reported_step = STEP_PATTERN
+            .captures(line)
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<u64>().ok());
         if let Some(sample) = parse_training_line(line) {
             self.current_step = self.current_step.max(sample.step);
             self.metrics.push(sample);
@@ -119,11 +127,28 @@ impl TrainingSnapshot {
             self.current_step = self.current_step.max(step);
             changed = true;
         }
+        let mut has_explicit_step_time = false;
         if let Some(captures) = STEP_TIME_PATTERN.captures(line) {
             self.step_time_seconds = captures
                 .get(1)
                 .and_then(|value| value.as_str().parse::<f64>().ok());
+            has_explicit_step_time = self.step_time_seconds.is_some();
             changed = true;
+        }
+        if let Some(wall_time) = WALL_TIME_PATTERN
+            .captures(line)
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<f64>().ok())
+            && let Some(step) = reported_step
+        {
+            if !has_explicit_step_time {
+                let interval_steps = step.saturating_sub(self.last_timing_step.unwrap_or(0));
+                if interval_steps > 0 && wall_time.is_finite() {
+                    self.step_time_seconds = Some(wall_time / interval_steps as f64);
+                    changed = true;
+                }
+            }
+            self.last_timing_step = Some(step);
         }
         if let Some(captures) = ETA_PATTERN.captures(line) {
             let days = captures
@@ -314,14 +339,7 @@ mod tests {
 
     #[test]
     fn updates_progress_and_timing_without_fixed_loss_names() {
-        let mut snapshot = TrainingSnapshot {
-            context: Default::default(),
-            current_step: 0,
-            eta_seconds: None,
-            step_time_seconds: None,
-            metrics: Vec::new(),
-            resources: Vec::new(),
-        };
+        let mut snapshot = TrainingSnapshot::default();
         assert!(snapshot.apply_log_line(
             "Batch     500: total wall time = 2.00 s, avg = 0.0040 s/step, eta = 0:01:30 at 2026-07-15 10:00"
         ));
@@ -333,6 +351,22 @@ mod tests {
             "Batch     500: total wall time = 2.00 s, avg = 0.0040 s/step, eta = 0:01:30 at 2026-07-15 10:00"
         )
         .is_none());
+    }
+
+    #[test]
+    fn derives_step_time_from_interval_wall_time_when_avg_is_omitted() {
+        let mut snapshot = TrainingSnapshot::default();
+        snapshot.apply_log_line("Batch       1: trn: rmse = 2.00e-01");
+        assert!(snapshot.apply_log_line(
+            "Batch       1: total wall time = 2.00 s, eta = 0:01:30 at 2026-07-15 10:00"
+        ));
+        assert_eq!(snapshot.step_time_seconds, Some(2.0));
+
+        snapshot.apply_log_line("Batch      10: trn: rmse = 1.00e-01");
+        assert!(snapshot.apply_log_line(
+            "Batch      10: total wall time = 4.50 s, eta = 0:00:45 at 2026-07-15 10:01"
+        ));
+        assert_eq!(snapshot.step_time_seconds, Some(0.5));
     }
 
     #[test]

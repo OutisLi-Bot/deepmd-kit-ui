@@ -12,9 +12,15 @@ export interface TrainingMetricSeries {
   key: string;
   label: string;
   group: string;
+  unit: string | null;
   phase: string;
   task: string | null;
   points: TrainingMetricPoint[];
+}
+
+export interface TrainingMetricUnit {
+  unit: string | null;
+  scale: number;
 }
 
 const exactLabels: Record<string, string> = {
@@ -83,6 +89,28 @@ export function metricGroup(key: string, lossTypes: string[] = []): string {
   return "Additional loss terms";
 }
 
+/**
+ * Resolve the user-facing physical unit and conversion for a DeePMD metric.
+ *
+ * DeePMD reports MAE and RMSE values in its native eV-based units. Studio
+ * presents the most frequently inspected quantities in meV-based units while
+ * leaving aggregate losses and custom metrics untouched.
+ *
+ * @param key - Metric key emitted by DeePMD.
+ * @returns Display unit and multiplier applied to every plotted value.
+ */
+export function metricUnit(key: string): TrainingMetricUnit {
+  const value = key.toLowerCase();
+  if (!/^(?:rmse|mae)_/.test(value)) return { unit: null, scale: 1 };
+  if (/(?:force_m|_fm)$/.test(value)) return { unit: "meV/μB", scale: 1_000 };
+  if (/(?:hessian|_h)$/.test(value)) return { unit: "meV/Å²", scale: 1_000 };
+  if (/(?:force|_f|_fr|_pf|_gf)$/.test(value)) return { unit: "meV/Å", scale: 1_000 };
+  if (/(?:atom_ener|atomic_energy|_ae)$/.test(value)) return { unit: "meV", scale: 1_000 };
+  if (/(?:virial|_v)$/.test(value)) return { unit: "meV/atom", scale: 1_000 };
+  if (/(?:ener|_e|_ea)$/.test(value)) return { unit: "meV/atom", scale: 1_000 };
+  return { unit: null, scale: 1 };
+}
+
 function seriesId(sample: TrainingMetricSample, key: string): string {
   return [key, sample.phase, sample.task ?? "default"].join("::");
 }
@@ -93,18 +121,21 @@ export function buildMetricSeries(training: TrainingSnapshot): TrainingMetricSer
     for (const [key, value] of Object.entries(sample.values)) {
       if (!Number.isFinite(value) || sample.phase === "total wall" || ["time", "avg", "eta", "wall_time"].includes(key.toLowerCase())) continue;
       const id = seriesId(sample, key);
+      const presentation = metricUnit(key);
       const existing = rows.get(id) ?? {
         id,
         key,
         label: metricLabel(key),
         group: metricGroup(key, training.context.lossTypes),
+        unit: presentation.unit,
         phase: sample.phase,
         task: sample.task,
         points: [],
       };
       const previous = existing.points.at(-1);
-      if (previous?.step === sample.step) previous.value = value;
-      else existing.points.push({ step: sample.step, value });
+      const displayValue = value * presentation.scale;
+      if (previous?.step === sample.step) previous.value = displayValue;
+      else existing.points.push({ step: sample.step, value: displayValue });
       rows.set(id, existing);
     }
   }

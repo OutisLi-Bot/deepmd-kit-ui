@@ -809,14 +809,7 @@ async fn run_training_tui(runtime: PythonRuntime, request: CommandRequest) -> Re
         sender,
         cancellation.clone(),
     ));
-    let mut training = TrainingSnapshot {
-        context: request.training.clone().unwrap_or_default(),
-        current_step: 0,
-        eta_seconds: None,
-        step_time_seconds: None,
-        metrics: Vec::new(),
-        resources: Vec::new(),
-    };
+    let mut training = TrainingSnapshot::new(request.training.clone().unwrap_or_default());
     let mut logs = Vec::new();
     let mut sampler = ResourceSampler::new();
     let mut pid = None;
@@ -958,7 +951,7 @@ fn render_training_tui(
     );
     frame.render_widget(
         Gauge::default()
-            .block(Block::bordered().title(" Optimization progress "))
+            .block(Block::bordered().title(" Training progress "))
             .gauge_style(Style::default().fg(Color::Rgb(153, 124, 241)))
             .ratio(ratio)
             .label(progress_label),
@@ -1002,7 +995,7 @@ fn render_training_resources(
     training: &TrainingSnapshot,
 ) {
     let rows = Layout::vertical([
-        Constraint::Length(5),
+        Constraint::Length(6),
         Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Length(3),
@@ -1013,7 +1006,7 @@ fn render_training_resources(
     let gpu = resource.and_then(|value| value.gpus.first());
     frame.render_widget(
         Paragraph::new(format!(
-            "Model  {}\nLoss   {}\nETA    {}",
+            "Model  {}\nLoss   {}\nETA    {}\nStep   {}",
             training
                 .context
                 .model_type
@@ -1028,6 +1021,10 @@ fn render_training_resources(
                 .eta_seconds
                 .map(|value| format!("{}m {}s", value / 60, value % 60))
                 .unwrap_or_else(|| "estimating".into()),
+            training
+                .step_time_seconds
+                .map(|value| format!("{value:.4} s"))
+                .unwrap_or_else(|| "measuring".into()),
         ))
         .block(Block::bordered().title(" Run summary ")),
         rows[0],
@@ -1132,20 +1129,53 @@ fn collect_metric_series(training: &TrainingSnapshot) -> Vec<(String, Vec<f64>)>
     let mut rows: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     for sample in &training.metrics {
         for (metric, value) in &sample.values {
+            let (display_value, unit) = metric_display(metric, *value);
             let name = format!(
-                "{}{} · {}",
+                "{}{} · {}{}",
                 sample
                     .task
                     .as_ref()
                     .map(|task| format!("{task} · "))
                     .unwrap_or_default(),
                 sample.phase,
-                metric
+                metric,
+                unit.map(|value| format!(" [{value}]")).unwrap_or_default(),
             );
-            rows.entry(name).or_default().push(*value);
+            rows.entry(name).or_default().push(display_value);
         }
     }
     rows.into_iter().collect()
+}
+
+fn metric_display(metric: &str, value: f64) -> (f64, Option<&'static str>) {
+    let metric = metric.to_ascii_lowercase();
+    if !(metric.starts_with("rmse_") || metric.starts_with("mae_")) {
+        return (value, None);
+    }
+    let unit = if metric.ends_with("force_m") || metric.ends_with("_fm") {
+        Some("meV/μB")
+    } else if metric.ends_with("hessian") || metric.ends_with("_h") {
+        Some("meV/Å²")
+    } else if metric.ends_with("force")
+        || metric.ends_with("_f")
+        || metric.ends_with("_fr")
+        || metric.ends_with("_pf")
+        || metric.ends_with("_gf")
+    {
+        Some("meV/Å")
+    } else if metric.ends_with("atom_ener")
+        || metric.ends_with("atomic_energy")
+        || metric.ends_with("_ae")
+    {
+        Some("meV")
+    } else if metric.ends_with("virial") || metric.ends_with("_v") {
+        Some("meV/atom")
+    } else if metric.ends_with("ener") || metric.ends_with("_e") || metric.ends_with("_ea") {
+        Some("meV/atom")
+    } else {
+        None
+    };
+    unit.map_or((value, None), |unit| (value * 1_000.0, Some(unit)))
 }
 
 fn normalized_sparkline(values: &[f64]) -> Vec<u64> {

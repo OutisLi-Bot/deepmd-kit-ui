@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TrainingSnapshot } from "../types";
-import { buildMetricSeries, metricGroup, metricLabel } from "./trainingMetrics";
+import { buildMetricSeries, metricGroup, metricLabel, metricUnit } from "./trainingMetrics";
 
 describe("training metric presentation", () => {
   it("classifies physical and specialized loss metrics", () => {
@@ -14,6 +14,15 @@ describe("training metric presentation", () => {
     expect(metricGroup("rmse")).toBe("Total loss");
     expect(metricGroup("l2_virial_loss")).toBe("Virial");
     expect(metricLabel("rmse_local_dipole")).toBe("RMSE local dipole");
+  });
+
+  it("converts physical MAE and RMSE values to meV-based display units", () => {
+    expect(metricUnit("rmse_e")).toEqual({ unit: "meV/atom", scale: 1_000 });
+    expect(metricUnit("mae_f")).toEqual({ unit: "meV/Å", scale: 1_000 });
+    expect(metricUnit("rmse_fm")).toEqual({ unit: "meV/μB", scale: 1_000 });
+    expect(metricUnit("rmse_h")).toEqual({ unit: "meV/Å²", scale: 1_000 });
+    expect(metricUnit("loss")).toEqual({ unit: null, scale: 1 });
+    expect(metricUnit("l2_ener_loss")).toEqual({ unit: null, scale: 1 });
   });
 
   it("keeps train, validation, and multi-task curves separate", () => {
@@ -32,6 +41,8 @@ describe("training metric presentation", () => {
     expect(series).toHaveLength(2);
     expect(new Set(series.map((item) => item.phase))).toEqual(new Set(["train", "validation"]));
     expect(series.every((item) => item.task === "water")).toBe(true);
+    expect(series.every((item) => item.unit === "meV/atom")).toBe(true);
+    expect(series.map((item) => item.points[0]?.value)).toEqual([200, 300]);
   });
 
   it("does not present timing telemetry as a loss curve", () => {

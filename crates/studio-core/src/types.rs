@@ -112,10 +112,36 @@ pub struct TrainingSnapshot {
     pub eta_seconds: Option<u64>,
     /// Average duration of one optimization step in seconds.
     pub step_time_seconds: Option<f64>,
+    /// Last timing-report step used to derive interval step time when a backend omits it.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub last_timing_step: Option<u64>,
     /// Dynamic metric history from all tasks and phases.
     pub metrics: Vec<TrainingMetricSample>,
     /// Recent hardware utilization history.
     pub resources: Vec<TrainingResourceSample>,
+}
+
+impl TrainingSnapshot {
+    /// Create an empty training snapshot for one launch context.
+    #[must_use]
+    pub fn new(context: TrainingContext) -> Self {
+        Self {
+            context,
+            current_step: 0,
+            eta_seconds: None,
+            step_time_seconds: None,
+            last_timing_step: None,
+            metrics: Vec::new(),
+            resources: Vec::new(),
+        }
+    }
+}
+
+impl Default for TrainingSnapshot {
+    fn default() -> Self {
+        Self::new(TrainingContext::default())
+    }
 }
 
 /// Lifecycle state persisted for a running or completed command.
@@ -162,14 +188,8 @@ impl TaskSnapshot {
     /// Create a queued task for a command request.
     #[must_use]
     pub fn queued(request: CommandRequest) -> Self {
-        let training = (request.command == "train").then(|| TrainingSnapshot {
-            context: request.training.clone().unwrap_or_default(),
-            current_step: 0,
-            eta_seconds: None,
-            step_time_seconds: None,
-            metrics: Vec::new(),
-            resources: Vec::new(),
-        });
+        let training = (request.command == "train")
+            .then(|| TrainingSnapshot::new(request.training.clone().unwrap_or_default()));
         Self {
             id: Uuid::new_v4(),
             request,

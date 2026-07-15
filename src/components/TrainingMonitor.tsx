@@ -7,9 +7,11 @@ import {
   Clock3,
   Copy,
   Cpu,
+  Eye,
   EyeOff,
   FolderOpen,
   Gauge,
+  GripVertical,
   HardDrive,
   MemoryStick,
   Microchip,
@@ -19,7 +21,14 @@ import {
   TrendingDown,
   Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import { openLocalPath } from "../lib/studio";
 import { buildMetricSeries, groupMetricSeries, type TrainingMetricSeries } from "../lib/trainingMetrics";
@@ -34,6 +43,8 @@ interface TrainingMonitorProps {
 interface MonitorPreferences {
   resources: Record<"cpu" | "gpu" | "memory", boolean>;
   hiddenMetricGroups: string[];
+  hiddenMetricSeries: string[];
+  metricGroupOrder: string[];
 }
 
 const palette = ["#8b6cf6", "#20b8cd", "#f39a55", "#59b985", "#e56c8a", "#7f9cf5", "#c08cf4"];
@@ -41,6 +52,8 @@ const preferencesKey = "deepmd-studio-monitor-panels";
 const defaultPreferences: MonitorPreferences = {
   resources: { cpu: true, gpu: true, memory: true },
   hiddenMetricGroups: [],
+  hiddenMetricSeries: [],
+  metricGroupOrder: [],
 };
 
 function loadPreferences(): MonitorPreferences {
@@ -49,17 +62,19 @@ function loadPreferences(): MonitorPreferences {
     return {
       resources: { ...defaultPreferences.resources, ...(stored?.resources ?? {}) },
       hiddenMetricGroups: Array.isArray(stored?.hiddenMetricGroups) ? stored.hiddenMetricGroups : [],
+      hiddenMetricSeries: Array.isArray(stored?.hiddenMetricSeries) ? stored.hiddenMetricSeries : [],
+      metricGroupOrder: Array.isArray(stored?.metricGroupOrder) ? stored.metricGroupOrder : [],
     };
   } catch {
-    return defaultPreferences;
+    return { ...defaultPreferences, resources: { ...defaultPreferences.resources } };
   }
 }
 
 function formatNumber(value: number): string {
   const absolute = Math.abs(value);
   if (absolute === 0) return "0";
-  if (absolute < 0.001 || absolute >= 1_000) return value.toExponential(2);
-  return value.toPrecision(3);
+  if (absolute < 0.001 || absolute >= 1_000_000) return value.toExponential(2);
+  return new Intl.NumberFormat(undefined, { maximumSignificantDigits: 4 }).format(value);
 }
 
 function formatBytes(value: number): string {
@@ -76,22 +91,26 @@ function formatDuration(seconds: number | null): string {
   return `${minutes} min`;
 }
 
-function seriesColor(series: TrainingMetricSeries, index: number): string {
-  if (series.phase === "validation") return palette[(index * 2 + 1) % palette.length];
-  return palette[(index * 2) % palette.length];
+function seriesColor(series: TrainingMetricSeries): string {
+  if (series.phase === "train") return palette[0];
+  if (series.phase === "validation") return palette[3];
+  let hash = 0;
+  for (const character of series.id) hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  return palette[Math.abs(hash) % palette.length];
 }
 
 function linePath(values: Array<{ x: number; y: number }>): string {
   return values.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
 }
 
-function LossChart({ series }: { series: TrainingMetricSeries[] }) {
+function LossChart({ series, unit }: { series: TrainingMetricSeries[]; unit: string | null }) {
   const width = 640;
   const height = 210;
   const left = 48;
   const right = 15;
   const top = 14;
   const bottom = 31;
+  if (!series.length) return <div className="chart-awaiting"><EyeOff size={20} /><span>All curves are hidden</span></div>;
   const allPoints = series.flatMap((row) => row.points.filter((point) => Number.isFinite(point.value) && point.value > 0));
   if (!allPoints.length) return <div className="chart-awaiting"><TrendingDown size={20} /><span>Waiting for the first loss report</span></div>;
 
@@ -114,11 +133,12 @@ function LossChart({ series }: { series: TrainingMetricSeries[] }) {
         return <g key={value}><line className="chart-grid-line" x1={left} x2={width - right} y1={yPosition} y2={yPosition} /><text className="chart-axis-label" x={left - 8} y={yPosition + 4} textAnchor="end">{`1e${Math.round(value)}`}</text></g>;
       })}
       <line className="chart-axis-line" x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} />
+      {unit && <text className="chart-unit-label" x={width - right} y={11} textAnchor="end">{unit}</text>}
       <text className="chart-axis-label" x={left} y={height - 9}>{new Intl.NumberFormat().format(xMin)}</text>
       <text className="chart-axis-label" x={width - right} y={height - 9} textAnchor="end">step {new Intl.NumberFormat().format(xMax)}</text>
-      {series.map((row, index) => {
+      {series.map((row) => {
         const points = row.points.filter((point) => point.value > 0).map((point) => ({ x: x(point.step), y: y(point.value) }));
-        const color = seriesColor(row, index);
+        const color = seriesColor(row);
         return (
           <g key={row.id} style={{ color }}>
             {points.length > 1 && <path className="chart-series-halo" d={linePath(points)} />}
@@ -163,18 +183,30 @@ export function TrainingMonitor({ task, onCancel }: TrainingMonitorProps) {
   const [copied, setCopied] = useState(false);
   const [panelMenuOpen, setPanelMenuOpen] = useState(false);
   const [preferences, setPreferences] = useState<MonitorPreferences>(loadPreferences);
+  const [draggedMetricGroup, setDraggedMetricGroup] = useState<string | null>(null);
+  const [dropMetricGroup, setDropMetricGroup] = useState<string | null>(null);
   const panelMenuRef = useRef<HTMLDivElement>(null);
+  const pointerDragGroupRef = useRef<string | null>(null);
   const training = task.training!;
   const metricSeries = useMemo(() => buildMetricSeries(training), [training]);
   const groups = useMemo(() => groupMetricSeries(metricSeries), [metricSeries]);
-  const visibleGroups = [...groups.entries()].filter(([group]) => !preferences.hiddenMetricGroups.includes(group));
+  const orderedGroups = useMemo(() => {
+    const ranks = new Map(preferences.metricGroupOrder.map((group, index) => [group, index]));
+    return [...groups.entries()].sort(([left], [right]) => {
+      const leftRank = ranks.get(left);
+      const rightRank = ranks.get(right);
+      if (leftRank != null || rightRank != null) return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER);
+      return left.localeCompare(right);
+    });
+  }, [groups, preferences.metricGroupOrder]);
+  const visibleGroups = orderedGroups.filter(([group]) => !preferences.hiddenMetricGroups.includes(group));
   const resource = latestResource(task);
   const total = training.context.totalSteps;
   const progress = total ? Math.min(100, (training.currentStep / total) * 100) : null;
   const started = new Date(task.createdAt).getTime();
   const finished = task.finishedAt ? new Date(task.finishedAt).getTime() : now;
   const elapsed = Math.max(0, (finished - started) / 1000);
-  const estimatedEta = training.etaSeconds ?? (total && training.stepTimeSeconds
+  const estimatedEta = training.etaSeconds ?? (total && training.stepTimeSeconds != null
     ? Math.max(0, total - training.currentStep) * training.stepTimeSeconds
     : null);
   const gpu = resource?.gpus.at(0) ?? null;
@@ -228,6 +260,77 @@ export function TrainingMonitor({ task, onCancel }: TrainingMonitorProps) {
     }));
   }
 
+  function setSeriesVisible(id: string, visible: boolean): void {
+    setPreferences((current) => ({
+      ...current,
+      hiddenMetricSeries: visible
+        ? current.hiddenMetricSeries.filter((item) => item !== id)
+        : [...new Set([...current.hiddenMetricSeries, id])],
+    }));
+  }
+
+  function reorderMetricGroup(source: string, target: string): void {
+    if (source === target) return;
+    const order = orderedGroups.map(([group]) => group);
+    const sourceIndex = order.indexOf(source);
+    const targetIndex = order.indexOf(target);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    order.splice(targetIndex, 0, ...order.splice(sourceIndex, 1));
+    setPreferences((current) => ({ ...current, metricGroupOrder: order }));
+  }
+
+  function moveMetricGroup(group: string, offset: number): void {
+    const order = visibleGroups.map(([name]) => name);
+    const sourceIndex = order.indexOf(group);
+    const target = order[sourceIndex + offset];
+    if (sourceIndex >= 0 && target) reorderMetricGroup(group, target);
+  }
+
+  function metricGroupAtPoint(clientX: number, clientY: number): string | null {
+    const card = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-metric-group]");
+    return card?.dataset.metricGroup ?? null;
+  }
+
+  function startMetricPointerDrag(event: ReactPointerEvent<HTMLButtonElement>, group: string): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pointerDragGroupRef.current = group;
+    setDraggedMetricGroup(group);
+  }
+
+  function moveMetricPointerDrag(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const source = pointerDragGroupRef.current;
+    if (!source) return;
+    event.preventDefault();
+    const target = metricGroupAtPoint(event.clientX, event.clientY);
+    setDropMetricGroup(target && target !== source ? target : null);
+  }
+
+  function finishMetricPointerDrag(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const source = pointerDragGroupRef.current;
+    const target = metricGroupAtPoint(event.clientX, event.clientY);
+    if (source && target) reorderMetricGroup(source, target);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    pointerDragGroupRef.current = null;
+    setDraggedMetricGroup(null);
+    setDropMetricGroup(null);
+  }
+
+  function cancelMetricPointerDrag(event: ReactPointerEvent<HTMLButtonElement>): void {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    pointerDragGroupRef.current = null;
+    setDraggedMetricGroup(null);
+    setDropMetricGroup(null);
+  }
+
+  function handleMetricHandleKey(event: ReactKeyboardEvent<HTMLButtonElement>, group: string): void {
+    if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    moveMetricGroup(group, event.key === "ArrowLeft" ? -1 : 1);
+  }
+
   return (
     <section className="training-monitor">
       <header className="monitor-header">
@@ -240,14 +343,14 @@ export function TrainingMonitor({ task, onCancel }: TrainingMonitorProps) {
             <button className="console-button" type="button" aria-expanded={panelMenuOpen} onClick={() => setPanelMenuOpen((current) => !current)}><SlidersHorizontal size={13} /> Panels</button>
             {panelMenuOpen && (
               <div className="monitor-panel-menu">
-                <header><div><small>Monitor layout</small><strong>Choose visible panels</strong></div><button type="button" onClick={() => setPreferences(defaultPreferences)}>Reset</button></header>
+                <header><div><small>Monitor layout</small><strong>Choose visible panels</strong></div><button type="button" onClick={() => setPreferences({ ...defaultPreferences, resources: { ...defaultPreferences.resources } })}>Reset</button></header>
                 <section><p>System</p>
                   {(["cpu", "gpu", "memory"] as const).map((name) => (
                     <label key={name}><input type="checkbox" checked={preferences.resources[name]} onChange={(event) => setResourceVisible(name, event.target.checked)} /><span><strong>{name === "memory" ? "Memory" : name.toUpperCase()}</strong><small>{name === "cpu" ? "Process-tree utilization" : name === "gpu" ? "Utilization, VRAM, and temperature" : "Process and system RAM"}</small></span></label>
                   ))}
                 </section>
                 {groups.size > 0 && <section><p>Loss charts</p>
-                  {[...groups.keys()].map((group) => (
+                  {orderedGroups.map(([group]) => (
                     <label key={group}><input type="checkbox" checked={!preferences.hiddenMetricGroups.includes(group)} onChange={(event) => setMetricVisible(group, event.target.checked)} /><span><strong>{group}</strong><small>{groups.get(group)?.map((row) => row.key).filter((value, index, values) => values.indexOf(value) === index).join(" · ")}</small></span></label>
                   ))}
                 </section>}
@@ -267,14 +370,14 @@ export function TrainingMonitor({ task, onCancel }: TrainingMonitorProps) {
 
       <div className="monitor-progress-card">
         <div className="progress-copy">
-          <p className="eyebrow">Optimization progress</p>
+          <p className="eyebrow">Training progress</p>
           <div className="progress-value"><strong>{progress == null ? "Running" : `${progress.toFixed(progress < 1 ? 2 : 1)}%`}</strong><span>{total ? `${new Intl.NumberFormat().format(training.currentStep)} / ${new Intl.NumberFormat().format(total)} steps` : `${new Intl.NumberFormat().format(training.currentStep)} steps completed`}</span></div>
           <div className="training-progress-track"><span style={{ width: `${progress ?? (task.status === "running" ? 8 : 100)}%` }} /></div>
         </div>
         <div className="progress-stats">
           <div><Clock3 size={15} /><span><small>Elapsed</small><strong>{formatDuration(elapsed)}</strong></span></div>
           <div><Gauge size={15} /><span><small>Remaining</small><strong>{task.status === "running" ? formatDuration(estimatedEta) : "—"}</strong></span></div>
-          <div><Zap size={15} /><span><small>Step time</small><strong>{training.stepTimeSeconds ? `${training.stepTimeSeconds.toFixed(4)} s` : "Measuring…"}</strong></span></div>
+          <div><Zap size={15} /><span><small>Step time</small><strong>{training.stepTimeSeconds != null ? `${training.stepTimeSeconds.toFixed(4)} s` : "Measuring…"}</strong></span></div>
         </div>
       </div>
 
@@ -296,19 +399,58 @@ export function TrainingMonitor({ task, onCancel }: TrainingMonitorProps) {
         </article>}
       </div>}
 
-      <div className="loss-monitor-heading"><div><p className="eyebrow">Live metrics</p><h3>Loss & validation</h3><p>Only metrics emitted by DeePMD loss reports are charted; timing remains in the progress panel.</p></div><span className="metric-count"><Sparkles size={14} /> {metricSeries.length} series</span></div>
+      <div className="loss-monitor-heading"><div><p className="eyebrow">Live metrics</p><h3>Loss & validation</h3><p>Train and validation curves share one metric card. Toggle either curve or drag cards into the order you prefer.</p></div><span className="metric-count"><Sparkles size={14} /> {groups.size} {groups.size === 1 ? "metric" : "metrics"}</span></div>
       {groups.size ? (
         visibleGroups.length ? <div className="loss-card-grid">
           {visibleGroups.map(([group, series]) => {
             const keys = series.map((row) => row.key).filter((value, index, values) => values.indexOf(value) === index);
+            const units = series.map((row) => row.unit).filter((unit): unit is string => unit != null).filter((value, index, values) => values.indexOf(value) === index);
+            const unit = units.length === 1 ? units[0] : null;
+            const displayedSeries = series.filter((row) => !preferences.hiddenMetricSeries.includes(row.id));
             const reports = Math.max(...series.map((row) => row.points.length), 0);
-            return <article className="loss-chart-card" key={group}>
-              <header><div><small>{keys.join(" · ")}</small><strong>{group}</strong></div><span><em>{reports} reports</em><button type="button" onClick={() => setMetricVisible(group, false)} title={`Hide ${group}`}><EyeOff size={13} /></button></span></header>
-              <LossChart series={series} />
+            const isDragging = draggedMetricGroup === group;
+            const isDropTarget = dropMetricGroup === group && !isDragging;
+            return <article
+              className={`loss-chart-card${isDragging ? " is-dragging" : ""}${isDropTarget ? " is-drop-target" : ""}`}
+              data-metric-group={group}
+              key={group}
+            >
+              <header>
+                <div className="metric-card-heading">
+                  <button
+                    className="metric-drag-handle"
+                    type="button"
+                    aria-label={`Reorder ${group} metric`}
+                    title="Drag to reorder · Alt+Arrow keys"
+                    onPointerDown={(event) => startMetricPointerDrag(event, group)}
+                    onPointerMove={moveMetricPointerDrag}
+                    onPointerUp={finishMetricPointerDrag}
+                    onPointerCancel={cancelMetricPointerDrag}
+                    onKeyDown={(event) => handleMetricHandleKey(event, group)}
+                  ><GripVertical size={15} /></button>
+                  <div><small>{keys.join(" · ")}{unit ? ` · ${unit}` : ""}</small><strong>{group}</strong></div>
+                </div>
+                <span><em>{reports} reports</em><button type="button" onClick={() => setMetricVisible(group, false)} title={`Hide ${group}`}><EyeOff size={13} /></button></span>
+              </header>
+              <LossChart series={displayedSeries} unit={unit} />
               <div className="loss-legend">
-                {series.map((row, index) => {
+                {series.map((row) => {
                   const latest = row.points.at(-1);
-                  return <div key={row.id}><i style={{ background: seriesColor(row, index) }} /><span><strong>{row.label}</strong><small>{row.task ? `${row.task} · ` : ""}{row.phase}</small></span><code>{latest ? formatNumber(latest.value) : "—"}</code></div>;
+                  const visible = !preferences.hiddenMetricSeries.includes(row.id);
+                  const phaseLabel = row.phase === "validation" ? "Validation" : row.phase === "train" ? "Train" : row.phase;
+                  return <button
+                    className={`metric-series-toggle${visible ? "" : " is-hidden"}`}
+                    key={row.id}
+                    type="button"
+                    aria-pressed={visible}
+                    title={`${visible ? "Hide" : "Show"} ${phaseLabel} ${row.label}`}
+                    onClick={() => setSeriesVisible(row.id, !visible)}
+                  >
+                    <i style={{ background: seriesColor(row) }} />
+                    <span><strong>{row.label}</strong><small>{row.task ? `${row.task} · ` : ""}{phaseLabel}</small></span>
+                    <code><span>{latest ? formatNumber(latest.value) : "—"}</span>{row.unit && <small>{row.unit}</small>}</code>
+                    {visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                  </button>;
                 })}
               </div>
             </article>;
