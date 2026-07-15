@@ -70,13 +70,14 @@ def test_runtime_report_is_structured() -> None:
 
 
 def test_training_schema_is_argcheck_driven_without_nvnmd() -> None:
+    """The schema follows the installed DeePMD version without legacy NVNMD."""
     schema = build_training_schema()
     arguments = {argument["name"]: argument for argument in schema["arguments"]}
     assert "model" in arguments
     assert "training" in arguments
     assert "nvnmd" not in arguments
     model_types = arguments["model"]["sub_variants"]["type"]["choice_dict"]
-    assert "dpa4" in model_types
+    assert "standard" in model_types
 
 
 def test_training_schema_exposes_closed_value_choices() -> None:
@@ -106,20 +107,14 @@ def test_training_schema_exposes_closed_value_choices() -> None:
         and {"default", "float32", "float64"}.issubset(field.get("choices", []))
         for field in fields
     )
-    assert any(
-        field["name"] == "so2_attn_res"
-        and field.get("choices") == ["none", "independent", "dependent"]
-        for field in fields
-    )
-    assert any(
-        field["name"] == "stat_file_mode" and field.get("choices") == ["read", "update"]
-        for field in fields
-    )
-    assert any(
-        field["name"] == "update_style"
-        and field.get("choices") == ["res_avg", "res_incr", "res_residual"]
-        for field in fields
-    )
+    optional_versioned_choices = {
+        "so2_attn_res": ["none", "independent", "dependent"],
+        "stat_file_mode": ["read", "update"],
+        "update_style": ["res_avg", "res_incr", "res_residual"],
+    }
+    for name, expected in optional_versioned_choices.items():
+        matching_fields = [field for field in fields if field["name"] == name]
+        assert all(field.get("choices") == expected for field in matching_fields)
     assert not any(
         choice.lower().rstrip(".") == "currently"
         for field in fields
@@ -128,13 +123,14 @@ def test_training_schema_exposes_closed_value_choices() -> None:
 
 
 def test_generated_training_input_is_validated_by_argcheck() -> None:
+    """A version-stable standard model is accepted by DeePMD argcheck."""
     result = validate_training_input(
         {
             "input": {
                 "model": {
-                    "type": "dpa4",
-                    "descriptor": {"type": "dpa4"},
-                    "fitting_net": {"type": "dpa4_ener"},
+                    "type": "standard",
+                    "descriptor": {"type": "se_e2_a"},
+                    "fitting_net": {"type": "ener"},
                 },
                 "training": {
                     "training_data": {"systems": "."},
@@ -144,4 +140,4 @@ def test_generated_training_input_is_validated_by_argcheck() -> None:
         }
     )
     assert result["valid"] is True
-    assert result["summary"]["model"] == "dpa4"
+    assert result["summary"]["model"] == "se_e2_a"

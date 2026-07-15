@@ -284,7 +284,11 @@ def prune_development_files(runtime_root: Path, target_platform: str) -> None:
 
     def remove_tree(candidate: Path) -> None:
         candidate_string = str(candidate)
-        if target_platform == "windows" and not candidate_string.startswith("\\\\?\\"):
+        if (
+            target_platform == "windows"
+            and os.name == "nt"
+            and not candidate_string.startswith("\\\\?\\")
+        ):
             candidate = Path("\\\\?\\" + str(candidate.resolve()))
         if candidate.is_symlink():
             candidate.unlink()
@@ -329,7 +333,7 @@ def prune_development_files(runtime_root: Path, target_platform: str) -> None:
         if not site_packages.is_dir():
             continue
         walk_root = site_packages
-        if target_platform == "windows":
+        if target_platform == "windows" and os.name == "nt":
             walk_root = Path("\\\\?\\" + str(site_packages.resolve()))
         for directory, subdirectories, files in os.walk(walk_root, topdown=True):
             test_directories = {
