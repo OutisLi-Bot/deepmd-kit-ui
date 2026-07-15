@@ -55,6 +55,21 @@ def test_ui_bridge_is_copied_into_private_runtime(tmp_path: Path) -> None:
     assert (site_packages / "deepmd_ui" / "bridge.py").is_file()
 
 
+def test_version_matched_examples_are_copied_without_nvnmd(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    runtime = tmp_path / "runtime"
+    (source / "examples" / "water").mkdir(parents=True)
+    (source / "examples" / "nvnmd").mkdir()
+    runtime.mkdir()
+    (source / "examples" / "water" / "input.json").write_text("{}", encoding="utf-8")
+    (source / "examples" / "nvnmd" / "train.json").write_text("{}", encoding="utf-8")
+
+    BUILD_RUNTIME.install_deepmd_examples(runtime, source)
+
+    assert (runtime / "deepmd-ui-examples" / "water" / "input.json").is_file()
+    assert not (runtime / "deepmd-ui-examples" / "nvnmd").exists()
+
+
 def test_prune_removes_tests_and_build_files(tmp_path: Path) -> None:
     site_packages = tmp_path / "Lib" / "site-packages"
     removable = [

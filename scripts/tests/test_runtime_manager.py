@@ -58,6 +58,24 @@ def test_current_application_bridge_is_resolved() -> None:
     )
 
 
+def test_runtime_examples_follow_selected_source(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    runtime = tmp_path / "runtime"
+    (source / "examples" / "water").mkdir(parents=True)
+    (source / "examples" / "nvnmd").mkdir()
+    runtime.mkdir()
+    (runtime / "deepmd-ui-examples").mkdir()
+    (runtime / "deepmd-ui-examples" / "stale.json").write_text("{}", encoding="utf-8")
+    (source / "examples" / "water" / "input.json").write_text("{}", encoding="utf-8")
+    (source / "examples" / "nvnmd" / "train.json").write_text("{}", encoding="utf-8")
+
+    RUNTIME_MANAGER._replace_examples(source, runtime)
+
+    assert (runtime / "deepmd-ui-examples" / "water" / "input.json").is_file()
+    assert not (runtime / "deepmd-ui-examples" / "stale.json").exists()
+    assert not (runtime / "deepmd-ui-examples" / "nvnmd").exists()
+
+
 def test_application_update_manifest_is_resolved(monkeypatch) -> None:
     manifest = {
         "schema_version": 1,

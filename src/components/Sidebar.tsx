@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-import { Activity, ChevronDown, Command, Gauge, Search, Settings2 } from "lucide-react";
+import { Activity, BookOpen, ChevronDown, Command, Gauge, Search, Settings2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { CommandCatalog, ViewId, Workflow } from "../types";
@@ -19,6 +19,7 @@ const primaryNavigation = [
   { id: "workbench" as const, label: "Workbench", icon: Command },
   { id: "tasks" as const, label: "Tasks", icon: Activity },
   { id: "runtime" as const, label: "Runtime", icon: Settings2 },
+  { id: "examples" as const, label: "Examples", icon: BookOpen },
 ];
 
 export function Sidebar({

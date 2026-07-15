@@ -15,6 +15,7 @@ $RuntimeManager = Join-Path $DesktopRoot "scripts\runtime_manager.py"
 $OutputDir = Join-Path $ReleaseDir "bundle\inno"
 $BridgeSourceDir = Join-Path $DesktopRoot "python\deepmd_ui"
 $BridgeRuntimeDir = Join-Path $RuntimeDir "Lib\site-packages\deepmd_ui"
+$ExamplesDir = Join-Path $RuntimeDir "deepmd-ui-examples"
 
 if (-not $AppVersion) {
     $Package = Get-Content (Join-Path $DesktopRoot "package.json") -Raw | ConvertFrom-Json
@@ -34,6 +35,10 @@ foreach ($Path in $RequiredFiles) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Required installer input is missing: $Path"
     }
+}
+if (-not (Test-Path -LiteralPath $ExamplesDir -PathType Container) -or
+    -not (Get-ChildItem -LiteralPath $ExamplesDir -Recurse -File -Filter "*.json" | Select-Object -First 1)) {
+    throw "Version-matched DeePMD examples are missing: $ExamplesDir"
 }
 
 $Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json

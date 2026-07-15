@@ -74,7 +74,7 @@ export function Dashboard({
             <p className="eyebrow">Quick start</p>
             <h2>Core workflows</h2>
           </div>
-          <span className="section-caption">Driven by DeePMD {catalog.deepmd_version}</span>
+          <span className="section-caption">Ready in your isolated runtime</span>
         </div>
         <div className="quick-grid">
           {featured.map((workflow) => (

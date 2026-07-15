@@ -10,6 +10,8 @@ import type {
   CatalogArgument,
   CommandCatalog,
   CommandRequest,
+  ExampleCatalog,
+  PreparedExample,
   ProcessEvent,
   RuntimeInstallResult,
   RuntimeLocation,
@@ -20,6 +22,8 @@ import type {
   TaskSnapshot,
   TrainingInputInspection,
   TrainingInputSchema,
+  TrainingSnapshot,
+  TrainingUpdate,
   JsonValue,
   Workflow,
 } from "../types";
@@ -239,9 +243,79 @@ let mockRuntimeSettings: RuntimeSettings = {
 
 let mockTasks: TaskSnapshot[] = [];
 const mockListeners = new Set<(event: ProcessEvent) => void>();
+const mockTrainingListeners = new Set<(event: TrainingUpdate) => void>();
+
+const mockExamples: ExampleCatalog = {
+  entries: [
+    {
+      id: "water/dpa4/input.json",
+      path: "water/dpa4/input.json",
+      title: "DPA4",
+      category: "Water",
+      modelType: "dpa4",
+      lossTypes: ["ener"],
+      totalSteps: 100_000,
+      systemCount: 2,
+      suggestedBackend: "pytorch",
+      description: "Train a DPA4 energy model on the bundled water dataset.",
+    },
+    {
+      id: "water/dpa4/input_multitask.json",
+      path: "water/dpa4/input_multitask.json",
+      title: "DPA4 · Multi-task",
+      category: "Water",
+      modelType: "Multi-task",
+      lossTypes: ["ener", "property"],
+      totalSteps: 80_000,
+      systemCount: 2,
+      suggestedBackend: "pytorch",
+      description: "A shared DPA4 backbone trained with multiple fitting tasks.",
+    },
+    {
+      id: "dos/train/input_torch.json",
+      path: "dos/train/input_torch.json",
+      title: "Train · DOS",
+      category: "DOS",
+      modelType: "standard",
+      lossTypes: ["dos"],
+      totalSteps: 40_000,
+      systemCount: 1,
+      suggestedBackend: "pytorch",
+      description: "Fit local and global density-of-states targets.",
+    },
+    {
+      id: "spin/dpa4/input.json",
+      path: "spin/dpa4/input.json",
+      title: "DPA4 · Spin",
+      category: "Spin",
+      modelType: "dpa4",
+      lossTypes: ["ener_spin"],
+      totalSteps: 60_000,
+      systemCount: 1,
+      suggestedBackend: "pytorch",
+      description: "Train energy, real-force, and magnetic-force targets together.",
+    },
+    {
+      id: "property/train/input_dpa4.json",
+      path: "property/train/input_dpa4.json",
+      title: "Train · Property",
+      category: "Property",
+      modelType: "dpa4",
+      lossTypes: ["property"],
+      totalSteps: 30_000,
+      systemCount: 1,
+      suggestedBackend: "pytorch",
+      description: "Train an intensive scalar property head on a DPA4 model.",
+    },
+  ],
+};
 
 function emitMock(event: ProcessEvent): void {
   for (const listener of mockListeners) listener(event);
+}
+
+function emitMockTraining(taskId: string, training: TrainingSnapshot): void {
+  for (const listener of mockTrainingListeners) listener({ taskId, training });
 }
 
 function updateMockTask(id: string, update: Partial<TaskSnapshot>): void {
@@ -274,6 +348,7 @@ function summarizeTrainingInput(input: Record<string, JsonValue>): TrainingInput
       steps: Number(training.numb_steps ?? 1_000_000),
       systems,
       system_count: Array.isArray(systems) ? systems.length : systems ? 1 : 0,
+      loss_types: [String(((input.loss ?? {}) as Record<string, JsonValue>).type ?? "ener")],
     },
     source_path: null,
     working_directory: null,
@@ -299,6 +374,30 @@ export async function validateTrainingInput(input: Record<string, JsonValue>): P
 export async function saveTrainingInput(path: string, input: Record<string, JsonValue>): Promise<string> {
   if (isDesktop) return invoke<string>("save_training_input", { path, input });
   return path.toLowerCase().endsWith(".json") ? path : `${path}.json`;
+}
+
+export async function getExamples(): Promise<ExampleCatalog> {
+  return isDesktop ? invoke<ExampleCatalog>("list_examples") : mockExamples;
+}
+
+export async function readExampleFile(path: string): Promise<string> {
+  if (isDesktop) return invoke<string>("read_example_file", { path });
+  const entry = mockExamples.entries.find((item) => item.path === path);
+  return JSON.stringify({
+    model: { type: entry?.modelType ?? "standard", descriptor: { type: entry?.modelType ?? "se_e2_a" } },
+    loss: { type: entry?.lossTypes[0] ?? "ener" },
+    training: { training_data: { systems: ["../data"] }, numb_steps: entry?.totalSteps ?? 100_000 },
+  }, null, 2);
+}
+
+export async function prepareExample(exampleId: string): Promise<PreparedExample> {
+  if (isDesktop) return invoke<PreparedExample>("prepare_example", { exampleId });
+  const path = `C:\\Users\\you\\AppData\\Local\\DeePMD Studio\\example-workspaces\\${exampleId.replaceAll("/", "\\")}`;
+  return {
+    inputPath: path,
+    workingDirectory: path.split("\\").slice(0, -1).join("\\"),
+    workspaceRoot: "C:\\Users\\you\\AppData\\Local\\DeePMD Studio\\example-workspaces",
+  };
 }
 
 export async function getSystemReport(): Promise<SystemReport> {
@@ -430,6 +529,19 @@ export async function getDefaultWorkingDirectory(): Promise<string> {
 export async function startTask(request: CommandRequest): Promise<TaskSnapshot> {
   if (isDesktop) return invoke<TaskSnapshot>("start_task", { request });
   const id = crypto.randomUUID();
+  const training: TrainingSnapshot | null = request.command === "train" ? {
+    context: request.training ?? {
+      inputPath: request.args[0] ?? null,
+      totalSteps: 1_000,
+      modelType: "dpa4",
+      lossTypes: ["ener"],
+    },
+    currentStep: 0,
+    etaSeconds: null,
+    stepTimeSeconds: null,
+    metrics: [],
+    resources: [],
+  } : null;
   const task: TaskSnapshot = {
     id,
     request,
@@ -439,6 +551,7 @@ export async function startTask(request: CommandRequest): Promise<TaskSnapshot> 
     createdAt: new Date().toISOString(),
     finishedAt: null,
     log: [],
+    training,
   };
   mockTasks = [task, ...mockTasks];
   window.setTimeout(() => {
@@ -449,8 +562,11 @@ export async function startTask(request: CommandRequest): Promise<TaskSnapshot> 
     "DEEPMD INFO    running on: workstation",
     "DEEPMD INFO    installed to: DeePMD Studio runtime",
     "DEEPMD INFO    training data with 2 systems",
-    "DEEPMD INFO    step      100: train_loss = 2.317e-02, lr = 9.998e-04",
-    "DEEPMD INFO    step      200: train_loss = 8.424e-03, lr = 9.992e-04",
+    "DEEPMD INFO    Batch       1: trn: rmse = 2.317e-01, rmse_e = 8.124e-02, rmse_f = 4.513e-01, lr = 9.998e-04",
+    "DEEPMD INFO    Batch     200: trn: rmse = 8.424e-02, rmse_e = 2.617e-02, rmse_f = 1.842e-01, lr = 9.992e-04",
+    "DEEPMD INFO    Batch     200: val: rmse = 9.126e-02, rmse_e = 2.934e-02, rmse_f = 2.013e-01",
+    "DEEPMD INFO    Batch     400: trn: rmse = 3.411e-02, rmse_e = 8.217e-03, rmse_f = 7.624e-02, lr = 9.971e-04",
+    "DEEPMD INFO    Batch     400: val: rmse = 4.065e-02, rmse_e = 1.014e-02, rmse_f = 8.831e-02",
   ];
   lines.forEach((message, index) => {
     window.setTimeout(() => {
@@ -458,6 +574,43 @@ export async function startTask(request: CommandRequest): Promise<TaskSnapshot> 
       updateMockTask(id, { log: [...(current?.log ?? []), message] });
       emitMock({ taskId: id, kind: "stdout", timestamp: new Date().toISOString(), message, pid: null, exitCode: null, cancelled: false });
     }, 500 + index * 360);
+  });
+  const metricRows = [
+    { step: 1, train: [0.2317, 0.08124, 0.4513], valid: [0.261, 0.092, 0.489], cpu: 22, gpu: 37, memory: 7.8 },
+    { step: 200, train: [0.08424, 0.02617, 0.1842], valid: [0.09126, 0.02934, 0.2013], cpu: 39, gpu: 82, memory: 9.2 },
+    { step: 400, train: [0.03411, 0.008217, 0.07624], valid: [0.04065, 0.01014, 0.08831], cpu: 43, gpu: 94, memory: 10.4 },
+    { step: 600, train: [0.01821, 0.004102, 0.04117], valid: [0.02312, 0.005884, 0.05249], cpu: 36, gpu: 91, memory: 10.8 },
+  ];
+  metricRows.forEach((row, index) => {
+    window.setTimeout(() => {
+      const current = mockTasks.find((item) => item.id === id);
+      if (!current?.training || current.status === "cancelled") return;
+      const timestamp = new Date().toISOString();
+      const next: TrainingSnapshot = {
+        ...current.training,
+        currentStep: row.step,
+        etaSeconds: Math.max(0, Math.round(((current.training.context.totalSteps ?? 1_000) - row.step) * 0.042)),
+        stepTimeSeconds: 0.042,
+        metrics: [
+          ...current.training.metrics,
+          { step: row.step, phase: "train", task: null, values: { rmse: row.train[0], rmse_e: row.train[1], rmse_f: row.train[2] }, learningRate: 9.99e-4, timestamp },
+          { step: row.step, phase: "validation", task: null, values: { rmse: row.valid[0], rmse_e: row.valid[1], rmse_f: row.valid[2] }, learningRate: null, timestamp },
+        ],
+        resources: [
+          ...current.training.resources,
+          {
+            timestamp,
+            cpuPercent: row.cpu,
+            processMemoryBytes: row.memory * 1024 ** 3,
+            systemMemoryUsedBytes: 28.4 * 1024 ** 3,
+            systemMemoryTotalBytes: 64 * 1024 ** 3,
+            gpus: [{ index: 0, name: "NVIDIA GeForce RTX 5090 Laptop GPU", utilizationPercent: row.gpu, memoryUsedBytes: 11.2 * 1024 ** 3, memoryTotalBytes: 24 * 1024 ** 3, temperatureCelsius: 68 }],
+          },
+        ],
+      };
+      updateMockTask(id, { training: next });
+      emitMockTraining(id, next);
+    }, 650 + index * 520);
   });
   window.setTimeout(() => {
     updateMockTask(id, { status: "succeeded", exitCode: 0, finishedAt: new Date().toISOString() });
@@ -495,6 +648,16 @@ export async function subscribeToTaskEvents(
   }
   mockListeners.add(callback);
   return () => mockListeners.delete(callback);
+}
+
+export async function subscribeToTrainingUpdates(
+  callback: (event: TrainingUpdate) => void,
+): Promise<UnlistenFn> {
+  if (isDesktop) {
+    return listen<TrainingUpdate>("studio://training-update", (event) => callback(event.payload));
+  }
+  mockTrainingListeners.add(callback);
+  return () => mockTrainingListeners.delete(callback);
 }
 
 export async function chooseInputPath(directory = false): Promise<string | null> {

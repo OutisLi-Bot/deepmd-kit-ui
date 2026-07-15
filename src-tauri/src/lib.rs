@@ -10,12 +10,14 @@ use std::time::Duration;
 
 use chrono::Utc;
 use deepmd_studio_core::{
-    ApplicationDownloadResult, ApplicationUpdatePlan, CommandRequest, ProcessEvent,
-    ProcessEventKind, PythonRuntime, RuntimeInstallResult, RuntimePlan, RuntimeSettings,
-    TaskSnapshot, TaskStatus, application_updates_root, build_runtime_arguments,
+    ApplicationDownloadResult, ApplicationUpdatePlan, CommandRequest, ExampleCatalog,
+    PreparedExample, ProcessEvent, ProcessEventKind, PythonRuntime, ResourceSampler,
+    RuntimeInstallResult, RuntimePlan, RuntimeSettings, TaskSnapshot, TaskStatus,
+    TrainingResourceSample, TrainingSnapshot, application_updates_root, build_runtime_arguments,
     download_application_update as download_application_installer, install_runtime,
-    load_runtime_settings, resolve_application_update, resolve_runtime_plan, run_streaming,
-    save_runtime_settings,
+    list_examples as load_examples, load_runtime_settings,
+    prepare_example as prepare_example_workspace, read_example_file as load_example_file,
+    resolve_application_update, resolve_runtime_plan, run_streaming, save_runtime_settings,
 };
 use directories::UserDirs;
 use serde::Serialize;
@@ -50,11 +52,10 @@ impl TaskManager {
         self.tasks.write().await.insert(task.id, task);
     }
 
-    async fn apply(&self, event: &ProcessEvent) {
+    async fn apply(&self, event: &ProcessEvent) -> Option<TrainingSnapshot> {
         let mut tasks = self.tasks.write().await;
-        let Some(task) = tasks.get_mut(&event.task_id) else {
-            return;
-        };
+        let task = tasks.get_mut(&event.task_id)?;
+        let mut training_changed = false;
         match event.kind {
             ProcessEventKind::Started => {
                 task.status = TaskStatus::Running;
@@ -70,6 +71,9 @@ impl TaskManager {
                     task.log.push(format!("{prefix}{message}"));
                     if task.log.len() > MAX_LOG_LINES {
                         task.log.drain(..task.log.len() - MAX_LOG_LINES);
+                    }
+                    if let Some(training) = &mut task.training {
+                        training_changed = training.apply_log_line(message);
                     }
                 }
             }
@@ -92,6 +96,7 @@ impl TaskManager {
                 task.status = TaskStatus::Failed;
             }
         }
+        training_changed.then(|| task.training.clone()).flatten()
     }
 
     async fn fail(&self, task_id: Uuid, error: String) -> ProcessEvent {
@@ -108,6 +113,25 @@ impl TaskManager {
         event
     }
 
+    async fn monitor_state(&self, task_id: Uuid) -> Option<(TaskStatus, Option<u32>, bool)> {
+        self.tasks
+            .read()
+            .await
+            .get(&task_id)
+            .map(|task| (task.status, task.pid, task.training.is_some()))
+    }
+
+    async fn push_resource(
+        &self,
+        task_id: Uuid,
+        sample: TrainingResourceSample,
+    ) -> Option<TrainingSnapshot> {
+        let mut tasks = self.tasks.write().await;
+        let training = tasks.get_mut(&task_id)?.training.as_mut()?;
+        training.push_resource(sample);
+        Some(training.clone())
+    }
+
     async fn remove_cancellation(&self, task_id: Uuid) {
         self.cancellations.lock().await.remove(&task_id);
     }
@@ -116,7 +140,15 @@ impl TaskManager {
 struct AppState {
     runtime: PythonRuntime,
     runtime_manager_script: PathBuf,
+    examples_root: PathBuf,
     tasks: TaskManager,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrainingUpdate {
+    task_id: Uuid,
+    training: TrainingSnapshot,
 }
 
 #[derive(Serialize)]
@@ -290,6 +322,29 @@ fn save_training_input(path: String, input: Value) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn list_examples(state: State<'_, AppState>) -> Result<ExampleCatalog, String> {
+    load_examples(&state.examples_root).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn read_example_file(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    load_example_file(&state.examples_root, &path).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn prepare_example(
+    state: State<'_, AppState>,
+    example_id: String,
+) -> Result<PreparedExample, String> {
+    let examples_root = state.examples_root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_example_workspace(&examples_root, &example_id).map_err(|error| format!("{error:#}"))
+    })
+    .await
+    .map_err(|error| format!("example workspace worker failed: {error}"))?
+}
+
+#[tauri::command]
 async fn get_system_report() -> Result<SystemReport, String> {
     tauri::async_runtime::spawn_blocking(collect_system_report)
         .await
@@ -437,6 +492,13 @@ async fn start_task(
     state.tasks.insert(task.clone(), cancellation.clone()).await;
     let runtime = state.runtime.clone();
     let manager = state.tasks.clone();
+    if task.training.is_some() {
+        let monitor_app = app.clone();
+        let monitor_manager = manager.clone();
+        tauri::async_runtime::spawn(async move {
+            monitor_training_resources(monitor_app, monitor_manager, task_id).await;
+        });
+    }
     tauri::async_runtime::spawn(async move {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let process = tokio::spawn(run_streaming(
@@ -447,8 +509,14 @@ async fn start_task(
             cancellation,
         ));
         while let Some(event) = receiver.recv().await {
-            manager.apply(&event).await;
+            let training = manager.apply(&event).await;
             let _ = app.emit("studio://task-event", &event);
+            if let Some(training) = training {
+                let _ = app.emit(
+                    "studio://training-update",
+                    &TrainingUpdate { task_id, training },
+                );
+            }
         }
         match process.await {
             Ok(Ok(_)) => {}
@@ -466,6 +534,36 @@ async fn start_task(
         manager.remove_cancellation(task_id).await;
     });
     Ok(task)
+}
+
+async fn monitor_training_resources(app: AppHandle, manager: TaskManager, task_id: Uuid) {
+    let mut sampler = ResourceSampler::new();
+    let mut interval = tokio::time::interval(Duration::from_millis(1_200));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        let Some((status, pid, is_training)) = manager.monitor_state(task_id).await else {
+            return;
+        };
+        if !is_training
+            || matches!(
+                status,
+                TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Cancelled
+            )
+        {
+            return;
+        }
+        let Some(pid) = pid.filter(|_| status == TaskStatus::Running) else {
+            continue;
+        };
+        let sample = sampler.sample(pid).await;
+        if let Some(training) = manager.push_resource(task_id, sample).await {
+            let _ = app.emit(
+                "studio://training-update",
+                &TrainingUpdate { task_id, training },
+            );
+        }
+    }
 }
 
 #[tauri::command]
@@ -500,6 +598,15 @@ pub fn run() {
         .setup(|app| {
             let resources = app.path().resource_dir().ok();
             let runtime = PythonRuntime::isolated(resources.as_deref())?;
+            let active_examples = runtime.prefix().join("deepmd-ui-examples");
+            let bundled_examples = resources
+                .as_deref()
+                .map(|root| root.join("runtime").join("deepmd-ui-examples"));
+            let examples_root = if active_examples.is_dir() {
+                active_examples
+            } else {
+                bundled_examples.unwrap_or(active_examples)
+            };
             let packaged_runtime_manager = resources
                 .as_deref()
                 .map(|path| path.join("runtime-manager").join("runtime_manager.py"))
@@ -518,6 +625,7 @@ pub fn run() {
             app.manage(AppState {
                 runtime,
                 runtime_manager_script,
+                examples_root,
                 tasks: TaskManager::new(),
             });
             Ok(())
@@ -528,6 +636,9 @@ pub fn run() {
             inspect_training_input,
             validate_training_input,
             save_training_input,
+            list_examples,
+            read_example_file,
+            prepare_example,
             get_system_report,
             get_runtime_report,
             get_runtime_summary,

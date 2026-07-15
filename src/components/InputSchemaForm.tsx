@@ -402,7 +402,7 @@ function InputObjectFields({ argument, value, onChange, path }: InputSchemaFormP
       {advanced.length > 0 && (
         <section className="schema-advanced">
           <button className="schema-advanced-toggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
-            <span><Info size={15} /><strong>Advanced options</strong><small>{advanced.length} additional settings from argcheck</small></span>
+            <span><Info size={15} /><strong>Advanced options</strong><small>{advanced.length} additional training settings</small></span>
             <ChevronDown className={showAdvanced ? "" : "collapsed"} size={16} />
           </button>
           {showAdvanced && (
@@ -412,7 +412,7 @@ function InputObjectFields({ argument, value, onChange, path }: InputSchemaFormP
                 {(normalizedQuery ? searched : advanced).map((field) => (
                   <SchemaField key={field.name} argument={field} parent={value} onParent={onChange} path={`${path}.${field.name}`} />
                 ))}
-                {normalizedQuery && searched.length === 0 && <p className="empty-inline">No argcheck field matches “{query}”.</p>}
+                {normalizedQuery && searched.length === 0 && <p className="empty-inline">No training option matches “{query}”.</p>}
               </div>
             </div>
           )}

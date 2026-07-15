@@ -231,6 +231,33 @@ def _studio_bridge() -> Path | None:
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
+def _replace_examples(source_root: Path, runtime: Path) -> None:
+    """Replace runtime examples with the selected DeePMD source revision.
+
+    Parameters
+    ----------
+    source_root : pathlib.Path
+        Extracted DeePMD-kit source root.
+    runtime : pathlib.Path
+        Staging application runtime that will become active atomically.
+    """
+    source = source_root / "examples"
+    destination = runtime / "deepmd-ui-examples"
+    if destination.exists():
+        shutil.rmtree(destination)
+    if not source.is_dir():
+        return
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        ignored = {name for name in names if name in {"__pycache__", ".git"}}
+        if Path(directory).resolve() == source.resolve():
+            ignored.update(name for name in names if name in {"nvnmd", ".gitignore"})
+        ignored.update(name for name in names if name.endswith((".pyc", ".pyo")))
+        return ignored
+
+    shutil.copytree(source, destination, ignore=ignore)
+
+
 def rebuild_runtime(base: Path, output: Path, plan: dict[str, Any]) -> dict[str, Any]:
     """Clone a runtime privately, overlay one source commit, and verify it."""
     base = base.resolve()
@@ -296,6 +323,8 @@ def rebuild_runtime(base: Path, output: Path, plan: dict[str, Any]) -> dict[str,
                 dpa_target,
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
+
+        _replace_examples(source_root, output)
 
         # The bridge is Studio UI protocol, not DeePMD runtime state. Keep a
         # compatibility copy in managed runtimes, while desktop/TUI launches

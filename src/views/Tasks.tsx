@@ -4,6 +4,7 @@ import { Activity, ChevronRight, Layers3, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { StatusBadge, TaskConsole } from "../components/TaskConsole";
+import { TrainingMonitor } from "../components/TrainingMonitor";
 import type { TaskSnapshot } from "../types";
 
 interface TasksProps {
@@ -56,6 +57,9 @@ export function Tasks({ tasks, selectedTaskId, onSelectedTask, onCancel }: Tasks
                   <span className="task-row-copy">
                     <strong>{task.request.label ?? task.request.command}</strong>
                     <small>{task.request.backend ?? "auto"} · {new Date(task.createdAt).toLocaleTimeString()}</small>
+                    {task.training?.context.totalSteps && (
+                      <span className="task-mini-progress"><i style={{ width: `${Math.min(100, task.training.currentStep / task.training.context.totalSteps * 100)}%` }} /></span>
+                    )}
                   </span>
                   <StatusBadge status={task.status} />
                   <ChevronRight size={14} />
@@ -64,7 +68,9 @@ export function Tasks({ tasks, selectedTaskId, onSelectedTask, onCancel }: Tasks
             </div>
           </aside>
           <main className="task-detail">
-            {selected && <TaskConsole task={selected} onCancel={selected.status === "running" ? () => onCancel(selected.id) : undefined} />}
+            {selected && (selected.training
+              ? <TrainingMonitor task={selected} onCancel={selected.status === "running" ? () => onCancel(selected.id) : undefined} />
+              : <TaskConsole task={selected} onCancel={selected.status === "running" ? () => onCancel(selected.id) : undefined} />)}
           </main>
         </div>
       ) : (

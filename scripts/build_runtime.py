@@ -151,6 +151,41 @@ def install_ui_bridge(runtime_root: Path, target_platform: str) -> None:
     )
 
 
+def install_deepmd_examples(runtime_root: Path, source_root: Path | None) -> None:
+    """Copy version-matched runnable examples into the private runtime.
+
+    Parameters
+    ----------
+    runtime_root : pathlib.Path
+        Root of the relocatable application runtime.
+    source_root : pathlib.Path or None
+        DeePMD-kit source checkout containing ``examples``. When omitted, no
+        example payload is installed.
+
+    Raises
+    ------
+    FileNotFoundError
+        If an explicit source checkout does not contain the examples tree.
+    """
+    destination = runtime_root / "deepmd-ui-examples"
+    if destination.exists():
+        shutil.rmtree(destination)
+    if source_root is None:
+        return
+    source = source_root.resolve() / "examples"
+    if not source.is_dir():
+        raise FileNotFoundError(f"DeePMD examples directory is missing: {source}")
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        ignored = {name for name in names if name in {"__pycache__", ".git"}}
+        if Path(directory).resolve() == source:
+            ignored.update(name for name in names if name in {"nvnmd", ".gitignore"})
+        ignored.update(name for name in names if name.endswith((".pyc", ".pyo")))
+        return ignored
+
+    shutil.copytree(source, destination, ignore=ignore)
+
+
 def run(
     arguments: Sequence[str | Path],
     *,
@@ -536,6 +571,7 @@ def build_runtime(namespace: argparse.Namespace) -> None:
     ]
     run(install_command)
     install_ui_bridge(output, target_platform)
+    install_deepmd_examples(output, namespace.deepmd_source_dir)
     write_manifest(
         python,
         output,
@@ -580,6 +616,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("DEEPMD_REPOSITORY", ""),
     )
     parser.add_argument("--deepmd-ref", default=os.environ.get("DEEPMD_REF", ""))
+    parser.add_argument(
+        "--deepmd-source-dir",
+        type=Path,
+        help="DeePMD-kit source checkout whose examples are bundled",
+    )
     parser.add_argument(
         "--deepmd-commit",
         default=os.environ.get("DEEPMD_COMMIT", ""),

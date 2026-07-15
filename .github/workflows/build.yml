@@ -172,6 +172,7 @@ jobs:
             --accelerator "${{ matrix.accelerator }}" \
             --deepmd-repository "$DEEPMD_REPOSITORY" \
             --deepmd-ref "$DEEPMD_REF" \
+            --deepmd-source-dir vendor/deepmd-kit \
             --deepmd-commit "${{ steps.deepmd.outputs.commit }}"
 
       - name: Install UI dependencies

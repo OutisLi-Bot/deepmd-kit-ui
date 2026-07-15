@@ -454,6 +454,17 @@ def _training_summary(data: dict[str, Any]) -> dict[str, Any]:
         1_000_000,
     )
     optimizer = data.get("optimizer") or {}
+    loss_types: set[str] = set()
+    loss = data.get("loss") or {}
+    if isinstance(loss, dict):
+        loss_types.add(str(loss.get("type", "ener")))
+    loss_dict = data.get("loss_dict") or {}
+    if isinstance(loss_dict, dict):
+        for task_loss in loss_dict.values():
+            if isinstance(task_loss, dict):
+                loss_types.add(str(task_loss.get("type", "ener")))
+    if not loss_types:
+        loss_types.add("ener")
     return {
         "model": model_label,
         "model_type": model_type,
@@ -461,6 +472,7 @@ def _training_summary(data: dict[str, Any]) -> dict[str, Any]:
         "steps": steps,
         "systems": systems,
         "system_count": system_count,
+        "loss_types": sorted(loss_types),
     }
 
 

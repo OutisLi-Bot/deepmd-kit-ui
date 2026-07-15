@@ -5,7 +5,7 @@ members = ["crates/studio-core", "crates/dpstudio", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "LGPL-3.0-or-later"
 authors = ["DeepModeling"]
@@ -18,6 +18,7 @@ clap = { version = "4.6.1", features = ["derive", "env"] }
 crossterm = "0.29.0"
 directories = "6.0.0"
 ratatui = "0.30.2"
+regex = "1.12.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 shell-words = "1.1.1"

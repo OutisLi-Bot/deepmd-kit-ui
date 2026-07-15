@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 import { AlertTriangle, LoaderCircle, Moon, RefreshCw, Sun, Zap } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { DeePMDMark } from "./components/Icons";
@@ -18,6 +18,7 @@ import {
   listTasks,
   startTask,
   subscribeToTaskEvents,
+  subscribeToTrainingUpdates,
 } from "./lib/studio";
 import type {
   CommandCatalog,
@@ -27,10 +28,12 @@ import type {
   RuntimeReport,
   SystemReport,
   TaskSnapshot,
+  TrainingUpdate,
   ViewId,
   Workflow,
 } from "./types";
 import { Dashboard } from "./views/Dashboard";
+import { Examples } from "./views/Examples";
 import { Runtime } from "./views/Runtime";
 import { Tasks } from "./views/Tasks";
 import { TrainingWorkbench } from "./views/TrainingWorkbench";
@@ -67,6 +70,10 @@ function applyProcessEvent(tasks: TaskSnapshot[], event: ProcessEvent): TaskSnap
   });
 }
 
+function applyTrainingUpdate(tasks: TaskSnapshot[], event: TrainingUpdate): TaskSnapshot[] {
+  return tasks.map((task) => task.id === event.taskId ? { ...task, training: event.training } : task);
+}
+
 function initialTheme(): "light" | "dark" {
   const saved = localStorage.getItem("deepmd-studio-theme");
   if (saved === "light" || saved === "dark") return saved;
@@ -81,6 +88,7 @@ export default function App() {
   const [backend, setBackend] = useState("pytorch");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [theme, setTheme] = useState(initialTheme);
+  const viewScrollRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (): Promise<void> => {
     setFatalError(null);
@@ -141,10 +149,29 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    viewScrollRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [view, workflowName]);
+
+  useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void subscribeToTaskEvents((event) => {
       setData((current) => current ? { ...current, tasks: applyProcessEvent(current.tasks, event) } : current);
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void subscribeToTrainingUpdates((event) => {
+      setData((current) => current ? { ...current, tasks: applyTrainingUpdate(current.tasks, event) } : current);
     }).then((dispose) => {
       if (disposed) dispose();
       else unlisten = dispose;
@@ -197,7 +224,15 @@ export default function App() {
     );
   }
 
-  const pageTitle = view === "home" ? "Overview" : view === "workbench" ? workflow?.title ?? "Workbench" : view === "tasks" ? "Tasks" : "Runtime";
+  const pageTitle = view === "home"
+    ? "Overview"
+    : view === "workbench"
+      ? workflow?.title ?? "Workbench"
+      : view === "tasks"
+        ? "Tasks"
+        : view === "examples"
+          ? "Examples"
+          : "Runtime";
   const runningCount = data.tasks.filter((task) => task.status === "running").length;
 
   return (
@@ -225,7 +260,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="view-scroll">
+        <div className="view-scroll" ref={viewScrollRef}>
           {view === "home" && (
             <Dashboard
               catalog={data.catalog}
@@ -273,6 +308,16 @@ export default function App() {
             />
           )}
           {view === "runtime" && <Runtime report={data.runtime} location={data.location} />}
+          {view === "examples" && (
+            <Examples
+              backends={data.catalog.backends}
+              runtime={data.runtime}
+              backend={backend}
+              onBackend={setBackend}
+              onWorkingDirectory={(workingDirectory) => setData({ ...data, workingDirectory })}
+              onRun={run}
+            />
+          )}
         </div>
       </div>
     </div>

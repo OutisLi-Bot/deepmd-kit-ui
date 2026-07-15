@@ -283,7 +283,7 @@ fn windowless_python(prefix: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let candidate = prefix.join("pythonw.exe");
-        return candidate.is_file().then_some(candidate);
+        candidate.is_file().then_some(candidate)
     }
     #[cfg(not(windows))]
     {

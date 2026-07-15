@@ -14,9 +14,9 @@ anything on `PATH`.
 
 | Layer | Technology | Responsibility |
 | --- | --- | --- |
-| Desktop | Tauri 2, React, TypeScript | Dynamic command forms, diagnostics, updates, tasks, and live logs |
-| Process core | Rust, Tokio | Shell-free launch, cancellation, bounded logs, and atomic runtime activation |
-| Terminal and agent CLI | Ratatui, `dpstudio` | Keyboard UI plus JSON/JSONL automation protocol |
+| Desktop | Tauri 2, React, TypeScript | Guided inputs, examples, diagnostics, updates, and live training dashboards |
+| Process core | Rust, Tokio | Shell-free launch, cancellation, metric parsing, resource sampling, and atomic runtime activation |
+| Terminal and agent CLI | Ratatui, `dpstudio` | Keyboard UI, examples, training monitoring, and JSON/JSONL automation protocol |
 | Scientific runtime | Relocatable CPython 3.11 | DeePMD-kit, CUDA PyTorch, PT-expt, JAX, and Windows `triton-windows` |
 
 The GUI and TUI use the same application-private runtime. Windows ships CUDA
@@ -39,12 +39,26 @@ monospace stack (SF Mono or Cascadia), with no bundled font dependency.
 ## Guided training inputs
 
 The Training workspace has two entry points. Existing JSON, YAML, and YML
-files can be selected with the native file picker and are checked by DeePMD's
-strict `argcheck` before training. The guided builder loads the complete,
-version-matched argument hierarchy and documentation lazily from the bundled
-DeePMD runtime, then presents model, dataset, optimizer, loss, validation, and
-advanced settings as progressive controls. Generated input is validated again
-before it can be saved or run.
+files can be selected with the native file picker. The guided builder reads the
+available options and documentation from the bundled DeePMD runtime, then
+presents model, dataset, optimizer, loss, validation, and advanced settings as
+progressive controls. Both paths end with the same one-click training action.
+
+Every training task opens the shared live monitor. It combines step progress
+and ETA with process-tree CPU/RAM, NVIDIA GPU/VRAM/temperature, dynamic
+train/validation loss charts, and collapsible process output. Metric names are
+discovered from the active training log instead of being limited to a fixed
+set, so energy, force, virial, DOS, tensor, property, denoising, multi-task, and
+future losses can use the same dashboard.
+
+## Examples
+
+Studio bundles the examples belonging to the same DeePMD source revision as
+its scientific runtime. The Examples workspace presents them as a searchable
+tree, previews each input and its model/loss/data summary, and prepares a
+writable application-private copy before running. An example contributes only
+the input and data; execution always goes through the shared training task and
+monitor used by the Training workspace.
 
 The Overview page shows a concise local-machine summary. Its configuration
 dialog reports CPU, memory, GPU/VRAM, Windows or macOS details, storage, and the
@@ -92,6 +106,10 @@ dpstudio self-update install
 
 `run --jsonl` emits one JSON object per process event. Arguments are always
 passed as an argument vector and never interpolated into a shell command.
+Inside `dpstudio tui`, `Tab` switches between Workflows and Examples. Training
+from either section opens the same live terminal dashboard with step progress,
+CPU/GPU/RAM status, dynamic metric sparklines, and streaming logs. Press `c` or
+`q` to stop a running task.
 
 ## Development
 

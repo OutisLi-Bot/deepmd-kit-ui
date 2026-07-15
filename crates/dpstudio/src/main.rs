@@ -1,24 +1,28 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //! DeePMD Studio terminal interface and JSONL agent protocol.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use deepmd_studio_core::{
-    ApplicationDownloadResult, CommandRequest, ProcessEvent, ProcessEventKind, PythonRuntime,
-    RuntimeChannel, RuntimeSettings, build_runtime_arguments, download_application_update,
-    install_runtime, load_runtime_settings, resolve_application_update, resolve_runtime_plan,
-    run_streaming,
+    ApplicationDownloadResult, CommandRequest, ExampleEntry, ProcessEvent, ProcessEventKind,
+    PythonRuntime, ResourceSampler, RuntimeChannel, RuntimeSettings, TrainingContext,
+    TrainingSnapshot, build_runtime_arguments, download_application_update, install_runtime,
+    list_examples, load_runtime_settings, prepare_example, resolve_application_update,
+    resolve_runtime_plan, run_streaming,
 };
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::{Color, Modifier, Style, Stylize};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Sparkline, Wrap,
+};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -195,7 +199,9 @@ async fn main() -> Result<()> {
             jsonl,
             deepmd_args,
         } => run_command(runtime, backend, workdir, deepmd_args, jsonl).await,
-        Commands::Tui { backend, workdir } => run_tui(runtime, backend, workdir).await,
+        Commands::Tui { backend, workdir } => {
+            run_tui(runtime, resource_dir.as_deref(), backend, workdir).await
+        }
     }
 }
 
@@ -313,6 +319,7 @@ async fn run_command(
         working_directory: workdir,
         environment: Default::default(),
         label: None,
+        training: None,
     };
     let task_id = Uuid::new_v4();
     let cancellation = CancellationToken::new();
@@ -379,9 +386,18 @@ struct Workflow {
     usage: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TuiSection {
+    Workflows,
+    Examples,
+}
+
 struct TuiApp {
     workflows: Vec<Workflow>,
-    list_state: ListState,
+    examples: Vec<ExampleEntry>,
+    workflow_state: ListState,
+    example_state: ListState,
+    section: TuiSection,
     backend: String,
     workdir: PathBuf,
     arguments: String,
@@ -390,40 +406,74 @@ struct TuiApp {
 }
 
 impl TuiApp {
-    fn new(workflows: Vec<Workflow>, backend: String, workdir: PathBuf) -> Self {
-        let mut list_state = ListState::default();
+    fn new(
+        workflows: Vec<Workflow>,
+        examples: Vec<ExampleEntry>,
+        backend: String,
+        workdir: PathBuf,
+    ) -> Self {
+        let mut workflow_state = ListState::default();
         if !workflows.is_empty() {
-            list_state.select(Some(0));
+            workflow_state.select(Some(0));
+        }
+        let mut example_state = ListState::default();
+        if !examples.is_empty() {
+            example_state.select(Some(0));
         }
         Self {
             workflows,
-            list_state,
+            examples,
+            workflow_state,
+            example_state,
+            section: TuiSection::Workflows,
             backend,
             workdir,
             arguments: String::new(),
             editing: false,
-            status: "Up/Down browse  |  e edit arguments  |  r run  |  q quit".into(),
+            status: "Tab switch  |  Up/Down browse  |  e edit  |  r run  |  q quit".into(),
         }
     }
 
-    fn selected(&self) -> Option<&Workflow> {
-        self.list_state
+    fn selected_workflow(&self) -> Option<&Workflow> {
+        self.workflow_state
             .selected()
             .and_then(|index| self.workflows.get(index))
     }
 
+    fn selected_example(&self) -> Option<&ExampleEntry> {
+        self.example_state
+            .selected()
+            .and_then(|index| self.examples.get(index))
+    }
+
+    fn toggle_section(&mut self) {
+        self.section = match self.section {
+            TuiSection::Workflows => TuiSection::Examples,
+            TuiSection::Examples => TuiSection::Workflows,
+        };
+        self.editing = false;
+    }
+
     fn select_offset(&mut self, delta: isize) {
-        if self.workflows.is_empty() {
+        let (length, state) = match self.section {
+            TuiSection::Workflows => (self.workflows.len(), &mut self.workflow_state),
+            TuiSection::Examples => (self.examples.len(), &mut self.example_state),
+        };
+        if length == 0 {
             return;
         }
-        let current = self.list_state.selected().unwrap_or(0) as isize;
-        let last = self.workflows.len() as isize - 1;
-        self.list_state
-            .select(Some((current + delta).clamp(0, last) as usize));
+        let current = state.selected().unwrap_or(0) as isize;
+        let last = length as isize - 1;
+        state.select(Some((current + delta).clamp(0, last) as usize));
     }
 }
 
-async fn run_tui(runtime: PythonRuntime, backend: String, workdir: PathBuf) -> Result<()> {
+async fn run_tui(
+    runtime: PythonRuntime,
+    resource_dir: Option<&std::path::Path>,
+    backend: String,
+    workdir: PathBuf,
+) -> Result<()> {
     let catalog = runtime.bridge("catalog").await?;
     let workflows = catalog["commands"]
         .as_array()
@@ -437,56 +487,84 @@ async fn run_tui(runtime: PythonRuntime, backend: String, workdir: PathBuf) -> R
             usage: item["usage"].as_str().unwrap_or_default().into(),
         })
         .collect();
-    let mut app = TuiApp::new(workflows, backend, workdir);
+    let examples_root = active_examples_root(&runtime, resource_dir);
+    let examples = list_examples(&examples_root)?.entries;
+    let mut app = TuiApp::new(workflows, examples, backend, workdir);
     loop {
         let action = run_tui_session(&mut app)?;
         match action {
             TuiAction::Quit => return Ok(()),
-            TuiAction::Run => {
-                let Some(workflow) = app.selected().cloned() else {
+            TuiAction::RunWorkflow => {
+                let Some(workflow) = app.selected_workflow().cloned() else {
                     continue;
                 };
                 let arguments = shell_words::split(&app.arguments)
                     .context("could not parse the argument line")?;
+                let training = if workflow.name == "train" {
+                    training_context_from_input(&runtime, &app.workdir, &arguments).await
+                } else {
+                    None
+                };
                 let request = CommandRequest {
                     backend: Some(app.backend.clone()),
-                    command: workflow.name,
+                    command: workflow.name.clone(),
                     args: arguments,
                     working_directory: app.workdir.clone(),
                     environment: Default::default(),
                     label: Some(workflow.title),
+                    training,
                 };
-                println!(
-                    "\n$ {} {}",
-                    runtime.executable().display(),
-                    build_runtime_arguments(&runtime, &request).join(" ")
-                );
-                println!("TUI execution hands control to the structured runner.\n");
-                let mut args = vec![request.command.clone()];
-                args.extend(request.args.clone());
-                let result = run_command(
-                    runtime.clone(),
-                    request.backend.clone(),
-                    request.working_directory.clone(),
-                    args,
-                    false,
-                )
-                .await;
-                if let Err(error) = result {
-                    eprintln!("{error:#}");
+                if request.command == "train" {
+                    run_training_tui(runtime.clone(), request).await?;
+                } else {
+                    run_request_in_console(runtime.clone(), request).await?;
                 }
-                print!("\nPress Enter to return to DeePMD Studio...");
-                io::stdout().flush()?;
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
+            }
+            TuiAction::RunExample => {
+                let Some(example) = app.selected_example().cloned() else {
+                    continue;
+                };
+                let prepared = prepare_example(&examples_root, &example.id)?;
+                let request = CommandRequest {
+                    backend: Some(app.backend.clone()),
+                    command: "train".into(),
+                    args: vec![
+                        prepared.input_path.display().to_string(),
+                        "--skip-neighbor-stat".into(),
+                    ],
+                    working_directory: prepared.working_directory,
+                    environment: Default::default(),
+                    label: Some(format!("Example · {}", example.title)),
+                    training: Some(TrainingContext {
+                        input_path: Some(prepared.input_path),
+                        total_steps: example.total_steps,
+                        model_type: Some(example.model_type),
+                        loss_types: example.loss_types,
+                    }),
+                };
+                run_training_tui(runtime.clone(), request).await?;
             }
         }
     }
 }
 
+fn active_examples_root(
+    runtime: &PythonRuntime,
+    resource_dir: Option<&std::path::Path>,
+) -> PathBuf {
+    let active = runtime.prefix().join("deepmd-ui-examples");
+    if active.is_dir() {
+        return active;
+    }
+    resource_dir
+        .map(|root| root.join("runtime").join("deepmd-ui-examples"))
+        .unwrap_or(active)
+}
+
 enum TuiAction {
     Quit,
-    Run,
+    RunWorkflow,
+    RunExample,
 }
 
 fn run_tui_session(app: &mut TuiApp) -> Result<TuiAction> {
@@ -518,9 +596,15 @@ fn run_tui_session(app: &mut TuiApp) -> Result<TuiAction> {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(TuiAction::Quit),
                 KeyCode::Up | KeyCode::Char('k') => app.select_offset(-1),
                 KeyCode::Down | KeyCode::Char('j') => app.select_offset(1),
-                KeyCode::Char('e') | KeyCode::Tab => app.editing = true,
+                KeyCode::Tab => app.toggle_section(),
+                KeyCode::Char('1') => app.section = TuiSection::Workflows,
+                KeyCode::Char('2') => app.section = TuiSection::Examples,
+                KeyCode::Char('e') if app.section == TuiSection::Workflows => app.editing = true,
                 KeyCode::Char('r') | KeyCode::Enter => {
-                    return Ok(TuiAction::Run);
+                    return Ok(match app.section {
+                        TuiSection::Workflows => TuiAction::RunWorkflow,
+                        TuiSection::Examples => TuiAction::RunExample,
+                    });
                 }
                 _ => {}
             }
@@ -546,40 +630,82 @@ fn render_tui(frame: &mut ratatui::Frame<'_>, app: &mut TuiApp) {
         .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
         .split(rows[1]);
     let header = Paragraph::new(format!(
-        " DeePMD Studio  •  backend {}  •  {}",
+        " DeePMD Studio  •  [1] Workflows  [2] Examples  •  backend {}  •  {}",
         app.backend,
         app.workdir.display()
     ))
     .bold()
     .block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(header, rows[0]);
-    let items: Vec<ListItem<'_>> = app
-        .workflows
-        .iter()
-        .map(|workflow| ListItem::new(format!("{}  ·  {}", workflow.title, workflow.category)))
-        .collect();
+    let items: Vec<ListItem<'_>> = match app.section {
+        TuiSection::Workflows => app
+            .workflows
+            .iter()
+            .map(|workflow| ListItem::new(format!("{}  ·  {}", workflow.title, workflow.category)))
+            .collect(),
+        TuiSection::Examples => app
+            .examples
+            .iter()
+            .map(|example| ListItem::new(example.path.replace('/', " / ")))
+            .collect(),
+    };
     let list = List::new(items)
-        .block(Block::bordered().title(" Workflows "))
+        .block(Block::bordered().title(match app.section {
+            TuiSection::Workflows => " Workflows ",
+            TuiSection::Examples => " Examples ",
+        }))
         .highlight_style(
             Style::default()
                 .fg(Color::Rgb(184, 162, 255))
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("› ");
-    frame.render_stateful_widget(list, columns[0], &mut app.list_state);
-    let detail = app
-        .selected()
-        .map(|workflow| {
-            format!(
-                "{}\n\n{}\n\n{}",
-                workflow.title, workflow.description, workflow.usage
-            )
-        })
-        .unwrap_or_else(|| "No workflow available".into());
+    match app.section {
+        TuiSection::Workflows => {
+            frame.render_stateful_widget(list, columns[0], &mut app.workflow_state)
+        }
+        TuiSection::Examples => {
+            frame.render_stateful_widget(list, columns[0], &mut app.example_state)
+        }
+    }
+    let detail = match app.section {
+        TuiSection::Workflows => app
+            .selected_workflow()
+            .map(|workflow| {
+                format!(
+                    "{}\n\n{}\n\n{}",
+                    workflow.title, workflow.description, workflow.usage
+                )
+            })
+            .unwrap_or_else(|| "No workflow available".into()),
+        TuiSection::Examples => app
+            .selected_example()
+            .map(|example| {
+                format!(
+                    "{}\n\nModel: {}\nLoss: {}\nSteps: {}\nSystems: {}\n\n{}\n\nA private writable copy is created before training.",
+                    example.title,
+                    example.model_type,
+                    example.loss_types.join(", "),
+                    example
+                        .total_steps
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "adaptive".into()),
+                    example.system_count,
+                    example
+                        .description
+                        .as_deref()
+                        .unwrap_or("Runnable input shipped with the active DeePMD runtime."),
+                )
+            })
+            .unwrap_or_else(|| "No bundled examples are available".into()),
+    };
     frame.render_widget(
         Paragraph::new(detail)
             .wrap(Wrap { trim: false })
-            .block(Block::bordered().title(" Command ")),
+            .block(Block::bordered().title(match app.section {
+                TuiSection::Workflows => " Command ",
+                TuiSection::Examples => " Training input ",
+            })),
         columns[1],
     );
     let input_style = if app.editing {
@@ -588,12 +714,445 @@ fn render_tui(frame: &mut ratatui::Frame<'_>, app: &mut TuiApp) {
         Style::default()
     };
     frame.render_widget(
-        Paragraph::new(app.arguments.as_str())
-            .style(input_style)
-            .block(Block::bordered().title(" Arguments ")),
+        Paragraph::new(if app.section == TuiSection::Examples {
+            "Press r to copy and run this example with the shared training monitor"
+        } else {
+            app.arguments.as_str()
+        })
+        .style(input_style)
+        .block(Block::bordered().title(" Arguments ")),
         rows[2],
     );
     frame.render_widget(Paragraph::new(app.status.as_str()).dim(), rows[3]);
+}
+
+async fn training_context_from_input(
+    runtime: &PythonRuntime,
+    workdir: &Path,
+    arguments: &[String],
+) -> Option<TrainingContext> {
+    let raw_input = arguments.first()?.to_owned();
+    let mut input_path = PathBuf::from(raw_input);
+    if input_path.is_relative() {
+        input_path = workdir.join(input_path);
+    }
+    let response = runtime
+        .bridge_with_payload("validate-input", &serde_json::json!({"path": input_path}))
+        .await
+        .ok();
+    let summary = response.as_ref().and_then(|value| value.get("summary"));
+    Some(TrainingContext {
+        input_path: Some(input_path),
+        total_steps: summary
+            .and_then(|value| value.get("steps"))
+            .and_then(Value::as_u64),
+        model_type: summary
+            .and_then(|value| value.get("model"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        loss_types: summary
+            .and_then(|value| value.get("loss_types"))
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+async fn run_request_in_console(runtime: PythonRuntime, request: CommandRequest) -> Result<()> {
+    println!(
+        "\n$ {} {}",
+        runtime.executable().display(),
+        build_runtime_arguments(&runtime, &request).join(" ")
+    );
+    let mut args = vec![request.command.clone()];
+    args.extend(request.args.clone());
+    if let Err(error) = run_command(
+        runtime,
+        request.backend,
+        request.working_directory,
+        args,
+        false,
+    )
+    .await
+    {
+        eprintln!("{error:#}");
+    }
+    print!("\nPress Enter to return to DeePMD Studio...");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(())
+}
+
+async fn run_training_tui(runtime: PythonRuntime, request: CommandRequest) -> Result<()> {
+    let task_id = Uuid::new_v4();
+    let cancellation = CancellationToken::new();
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let process = tokio::spawn(run_streaming(
+        runtime,
+        request.clone(),
+        task_id,
+        sender,
+        cancellation.clone(),
+    ));
+    let mut training = TrainingSnapshot {
+        context: request.training.clone().unwrap_or_default(),
+        current_step: 0,
+        eta_seconds: None,
+        step_time_seconds: None,
+        metrics: Vec::new(),
+        resources: Vec::new(),
+    };
+    let mut logs = Vec::new();
+    let mut sampler = ResourceSampler::new();
+    let mut pid = None;
+    let mut finished = false;
+    let mut exit_code = None;
+    let mut cancelled = false;
+    let started = Instant::now();
+    let mut last_sample = Instant::now() - Duration::from_secs(2);
+    let mut terminal = ratatui::init();
+
+    let ui_result = async {
+        loop {
+            while let Ok(process_event) = receiver.try_recv() {
+                if let Some(message) = process_event.message {
+                    training.apply_log_line(&message);
+                    logs.push(message);
+                    if logs.len() > 1_000 {
+                        logs.drain(..logs.len() - 1_000);
+                    }
+                }
+                if process_event.kind == ProcessEventKind::Started {
+                    pid = process_event.pid;
+                }
+                if process_event.kind == ProcessEventKind::Finished {
+                    finished = true;
+                    cancelled = process_event.cancelled;
+                    exit_code = process_event.exit_code;
+                }
+            }
+            if let Some(process_id) = pid.filter(|_| !finished)
+                && last_sample.elapsed() >= Duration::from_millis(1_200)
+            {
+                training.push_resource(sampler.sample(process_id).await);
+                last_sample = Instant::now();
+            }
+            terminal.draw(|frame| {
+                render_training_tui(
+                    frame,
+                    &request,
+                    &training,
+                    &logs,
+                    started.elapsed(),
+                    finished,
+                    cancelled,
+                    exit_code,
+                )
+            })?;
+
+            if event::poll(Duration::from_millis(80))?
+                && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press
+            {
+                if finished
+                    && matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q'))
+                {
+                    break;
+                }
+                if !finished
+                    && matches!(
+                        key.code,
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('c')
+                    )
+                {
+                    cancellation.cancel();
+                    cancelled = true;
+                }
+            }
+            if process.is_finished() && receiver.is_closed() && !finished {
+                finished = true;
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    ratatui::restore();
+    ui_result?;
+    match process.await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(error) => Err(anyhow!("training worker failed: {error}")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_training_tui(
+    frame: &mut ratatui::Frame<'_>,
+    request: &CommandRequest,
+    training: &TrainingSnapshot,
+    logs: &[String],
+    elapsed: Duration,
+    finished: bool,
+    cancelled: bool,
+    exit_code: Option<i32>,
+) {
+    let rows = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(14),
+        Constraint::Length(1),
+    ])
+    .split(frame.area());
+    let title = request.label.as_deref().unwrap_or("DeePMD training");
+    let state = if !finished {
+        "RUNNING".fg(Color::Rgb(102, 209, 154))
+    } else if cancelled {
+        "CANCELLED".fg(Color::Rgb(241, 137, 137))
+    } else if exit_code == Some(0) {
+        "COMPLETED".fg(Color::Rgb(102, 209, 154))
+    } else {
+        "FAILED".fg(Color::Rgb(241, 137, 137))
+    };
+    frame.render_widget(
+        Paragraph::new(format!(
+            " DeePMD Studio  •  {}  •  {}  •  {:.0}s",
+            title,
+            state.content,
+            elapsed.as_secs_f64()
+        ))
+        .bold()
+        .block(Block::default().borders(Borders::BOTTOM)),
+        rows[0],
+    );
+    let total = training.context.total_steps;
+    let ratio = total
+        .map(|value| training.current_step as f64 / value.max(1) as f64)
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let progress_label = total.map_or_else(
+        || format!("{} steps", training.current_step),
+        |value| {
+            format!(
+                "{:.1}%  •  {} / {} steps",
+                ratio * 100.0,
+                training.current_step,
+                value
+            )
+        },
+    );
+    frame.render_widget(
+        Gauge::default()
+            .block(Block::bordered().title(" Optimization progress "))
+            .gauge_style(Style::default().fg(Color::Rgb(153, 124, 241)))
+            .ratio(ratio)
+            .label(progress_label),
+        rows[1],
+    );
+
+    let columns =
+        Layout::horizontal([Constraint::Percentage(34), Constraint::Percentage(66)]).split(rows[2]);
+    render_training_resources(frame, columns[0], training);
+    let right = Layout::vertical([Constraint::Percentage(72), Constraint::Percentage(28)])
+        .split(columns[1]);
+    render_training_metrics(frame, right[0], training);
+    let log_height = right[1].height.saturating_sub(2) as usize;
+    let log_text = logs
+        .iter()
+        .rev()
+        .take(log_height)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    frame.render_widget(
+        Paragraph::new(log_text)
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(" Process output ")),
+        right[1],
+    );
+    let footer = if finished {
+        "Enter/Esc return  •  training history remains in the GUI Tasks view"
+    } else {
+        "c/q stop training  •  metrics are discovered dynamically from the active loss"
+    };
+    frame.render_widget(Paragraph::new(footer).dim(), rows[3]);
+}
+
+fn render_training_resources(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    training: &TrainingSnapshot,
+) {
+    let rows = Layout::vertical([
+        Constraint::Length(5),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(3),
+    ])
+    .split(area);
+    let resource = training.resources.last();
+    let gpu = resource.and_then(|value| value.gpus.first());
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Model  {}\nLoss   {}\nETA    {}",
+            training
+                .context
+                .model_type
+                .as_deref()
+                .unwrap_or("detecting"),
+            if training.context.loss_types.is_empty() {
+                "detecting".into()
+            } else {
+                training.context.loss_types.join(", ")
+            },
+            training
+                .eta_seconds
+                .map(|value| format!("{}m {}s", value / 60, value % 60))
+                .unwrap_or_else(|| "estimating".into()),
+        ))
+        .block(Block::bordered().title(" Run summary ")),
+        rows[0],
+    );
+    frame.render_widget(
+        Gauge::default()
+            .block(Block::bordered().title(" CPU "))
+            .gauge_style(Style::default().fg(Color::Rgb(153, 124, 241)))
+            .ratio(resource.map_or(0.0, |value| value.cpu_percent as f64 / 100.0))
+            .label(resource.map_or_else(
+                || "waiting".into(),
+                |value| format!("{:.1}%", value.cpu_percent),
+            )),
+        rows[1],
+    );
+    frame.render_widget(
+        Gauge::default()
+            .block(Block::bordered().title(" GPU "))
+            .gauge_style(Style::default().fg(Color::Rgb(32, 184, 205)))
+            .ratio(gpu.map_or(0.0, |value| value.utilization_percent as f64 / 100.0))
+            .label(gpu.map_or_else(
+                || "CPU / Metal / waiting".into(),
+                |value| format!("{:.0}%  {}", value.utilization_percent, value.name),
+            )),
+        rows[2],
+    );
+    let memory_ratio = resource.map_or(0.0, |value| {
+        value.system_memory_used_bytes as f64 / value.system_memory_total_bytes.max(1) as f64
+    });
+    frame.render_widget(
+        Gauge::default()
+            .block(Block::bordered().title(" System RAM "))
+            .gauge_style(Style::default().fg(Color::Rgb(243, 154, 85)))
+            .ratio(memory_ratio.clamp(0.0, 1.0))
+            .label(resource.map_or_else(
+                || "waiting".into(),
+                |value| {
+                    format!(
+                        "process {:.1} GB",
+                        value.process_memory_bytes as f64 / 1024_f64.powi(3)
+                    )
+                },
+            )),
+        rows[3],
+    );
+    frame.render_widget(
+        Paragraph::new(gpu.map_or_else(
+            || "No NVIDIA telemetry. CPU and RAM monitoring remain active.".into(),
+            |value| {
+                format!(
+                    "GPU memory {:.1}/{:.1} GB\nTemperature {} °C",
+                    value.memory_used_bytes as f64 / 1024_f64.powi(3),
+                    value.memory_total_bytes as f64 / 1024_f64.powi(3),
+                    value
+                        .temperature_celsius
+                        .map(|temperature| format!("{temperature:.0}"))
+                        .unwrap_or_else(|| "—".into())
+                )
+            },
+        ))
+        .wrap(Wrap { trim: false })
+        .block(Block::bordered().title(" Accelerator ")),
+        rows[4],
+    );
+}
+
+fn render_training_metrics(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    training: &TrainingSnapshot,
+) {
+    let series = collect_metric_series(training);
+    if series.is_empty() {
+        frame.render_widget(
+            Paragraph::new("Waiting for the first reported training step…")
+                .block(Block::bordered().title(" Loss & validation ")),
+            area,
+        );
+        return;
+    }
+    let maximum = usize::from(area.height.saturating_sub(2) / 3).max(1);
+    let visible = series.into_iter().take(maximum).collect::<Vec<_>>();
+    let constraints = visible
+        .iter()
+        .map(|_| Constraint::Length(3))
+        .collect::<Vec<_>>();
+    let rows = Layout::vertical(constraints).split(area);
+    for ((name, values), row) in visible.into_iter().zip(rows.iter()) {
+        let data = normalized_sparkline(&values);
+        let latest = values.last().copied().unwrap_or_default();
+        frame.render_widget(
+            Sparkline::default()
+                .block(Block::bordered().title(format!(" {name}  latest {latest:.2e} ")))
+                .style(Style::default().fg(Color::Rgb(153, 124, 241)))
+                .data(&data),
+            *row,
+        );
+    }
+}
+
+fn collect_metric_series(training: &TrainingSnapshot) -> Vec<(String, Vec<f64>)> {
+    let mut rows: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for sample in &training.metrics {
+        for (metric, value) in &sample.values {
+            let name = format!(
+                "{}{} · {}",
+                sample
+                    .task
+                    .as_ref()
+                    .map(|task| format!("{task} · "))
+                    .unwrap_or_default(),
+                sample.phase,
+                metric
+            );
+            rows.entry(name).or_default().push(*value);
+        }
+    }
+    rows.into_iter().collect()
+}
+
+fn normalized_sparkline(values: &[f64]) -> Vec<u64> {
+    let logs = values
+        .iter()
+        .filter(|value| value.is_finite() && **value > 0.0)
+        .map(|value| value.log10())
+        .collect::<Vec<_>>();
+    if logs.is_empty() {
+        return vec![0];
+    }
+    let minimum = logs.iter().copied().fold(f64::INFINITY, f64::min);
+    let maximum = logs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    logs.into_iter()
+        .map(|value| (((value - minimum) / (maximum - minimum).max(0.01)) * 100.0) as u64)
+        .collect()
 }
 
 fn bundled_resource_dir() -> Option<PathBuf> {

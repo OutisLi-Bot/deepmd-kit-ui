@@ -47,6 +47,7 @@ import type {
   RuntimeReport,
   TrainingInputInspection,
   TrainingInputSchema,
+  TrainingInputSummary,
   Workflow,
 } from "../types";
 
@@ -230,7 +231,10 @@ export function TrainingWorkbench({
     return args;
   }
 
-  async function start(path: string): Promise<void> {
+  async function start(
+    path: string,
+    summary: TrainingInputSummary | null = mode === "existing" ? inspection?.summary ?? null : validation?.summary ?? null,
+  ): Promise<void> {
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -241,6 +245,12 @@ export function TrainingWorkbench({
         workingDirectory,
         environment: {},
         label: `Train · ${basename(path)}`,
+        training: {
+          inputPath: path,
+          totalSteps: summary?.steps ?? null,
+          modelType: summary?.model ?? null,
+          lossTypes: summary?.loss_types ?? [],
+        },
       });
     } catch (reason) {
       setSubmitError(reason instanceof Error ? reason.message : String(reason));
@@ -282,7 +292,7 @@ export function TrainingWorkbench({
       if (!destination) return;
       const saved = await saveTrainingInput(destination, compactDraft);
       setInputPath(saved);
-      if (runAfterSave) await start(saved);
+      if (runAfterSave) await start(saved, checked.summary);
     } catch (reason) {
       setSubmitError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -371,17 +381,17 @@ export function TrainingWorkbench({
     <div className="view workbench-view training-workbench">
       <header className="workflow-header training-header">
         <div className={`workflow-hero-icon accent-${workflow.accent}`}><WorkflowIcon name={workflow.icon} size={24} /></div>
-        <div><p className="eyebrow">Training · guided workflow</p><h1>Train a model</h1><p>Bring an input you trust, or build one interactively from DeePMD {schema?.deepmd_version ?? runtime.deepmd_version} argcheck.</p></div>
+        <div><p className="eyebrow">Training · guided workflow</p><h1>Train a model</h1><p>Start from a ready-made input, or create one step by step with guided controls.</p></div>
         {mode !== "choose" && <button className="secondary-button change-input-mode" type="button" onClick={() => setMode("choose")}><ArrowLeft size={14} /> Change input method</button>}
       </header>
 
       {mode === "choose" ? (
         <section className="training-mode-shell">
-          <div className="training-mode-intro"><p className="eyebrow">Training input</p><h2>How would you like to begin?</h2><p>No command-line paths to type. Choose a file, or let Studio guide you through the current DeePMD schema.</p></div>
+          <div className="training-mode-intro"><p className="eyebrow">Training input</p><h2>How would you like to begin?</h2><p>No command-line paths to type. Choose a file, or let Studio guide you through each training decision.</p></div>
           <div className="training-mode-grid">
             <button className="training-mode-card" type="button" onClick={() => void enterExisting()}>
               <span className="mode-card-icon existing"><Upload size={24} /></span>
-              <span><small>Already configured</small><strong>Use existing JSON / YAML</strong><p>Pick an input, validate it with argcheck, review the detected model, then train.</p></span>
+              <span><small>Already configured</small><strong>Use existing JSON / YAML</strong><p>Pick an input, review the detected model and training settings, then start.</p></span>
               <ArrowRight size={18} />
             </button>
             <button className="training-mode-card featured" type="button" onClick={() => void enterBuilder()}>
@@ -390,7 +400,7 @@ export function TrainingWorkbench({
               <ArrowRight size={18} />
             </button>
           </div>
-          <div className="schema-source-note"><Braces size={16} /><span><strong>Version matched</strong> Every field, default, variant, and description comes from the bundled DeepMD runtime—not a copied Studio schema.</span></div>
+          <div className="schema-source-note"><Braces size={16} /><span><strong>Always in sync</strong> Studio reads available fields, defaults, and descriptions directly from your DeePMD runtime.</span></div>
         </section>
       ) : mode === "existing" ? (
         <div className="training-layout">
@@ -398,20 +408,20 @@ export function TrainingWorkbench({
             <div className="section-heading-row"><div><p className="eyebrow">Existing input</p><h2>Choose and verify</h2></div>{inputPath && <button className="text-button" type="button" onClick={() => void chooseExisting()}><RefreshCw size={14} /> Replace</button>}</div>
             <button className={inputPath ? "input-drop-card selected" : "input-drop-card"} type="button" onClick={() => void chooseExisting()}>
               <span className="input-file-icon">{inspecting ? <LoaderCircle className="spin" size={27} /> : inputPath ? <FileCheck2 size={27} /> : <FileJson size={27} />}</span>
-              <span><strong>{inspecting ? "Checking with argcheck…" : inputPath ? basename(inputPath) : "Choose a DeePMD input"}</strong><small>{inputPath ?? "JSON, YAML, or YML"}</small></span>
+              <span><strong>{inspecting ? "Checking input…" : inputPath ? basename(inputPath) : "Choose a DeePMD input"}</strong><small>{inputPath ?? "JSON, YAML, or YML"}</small></span>
               <span className="secondary-button"><FolderOpen size={14} /> Browse</span>
             </button>
             {inspection && <InspectionSummary inspection={inspection} />}
-            {inspection?.valid && <div className="verified-strip"><CheckCircle2 size={16} /><span><strong>Ready to train</strong> The file parses and passes strict DeePMD argcheck validation.</span></div>}
+            {inspection?.valid && <div className="verified-strip"><CheckCircle2 size={16} /><span><strong>Ready to train</strong> The input is complete and compatible with the active runtime.</span></div>}
           </main>
           {executionPanel}
         </div>
       ) : (
         <div className="training-builder-shell">
           {!schema && !schemaError ? (
-            <div className="schema-loading"><LoaderCircle className="spin" size={24} /><strong>Loading DeepMD argcheck</strong><span>This happens only when the guided builder is opened.</span></div>
+            <div className="schema-loading"><LoaderCircle className="spin" size={24} /><strong>Loading training options</strong><span>Studio is preparing the guided input builder.</span></div>
           ) : schemaError ? (
-            <div className="schema-loading error"><AlertCircle size={24} /><strong>Could not load the input schema</strong><span>{schemaError}</span><button className="secondary-button" type="button" onClick={() => void loadSchema()}>Try again</button></div>
+            <div className="schema-loading error"><AlertCircle size={24} /><strong>Could not load training options</strong><span>{schemaError}</span><button className="secondary-button" type="button" onClick={() => void loadSchema()}>Try again</button></div>
           ) : schema ? (
             <>
               <nav className="builder-stepper" aria-label="Input builder steps">
@@ -425,7 +435,7 @@ export function TrainingWorkbench({
                 <main className="training-builder-card">
                   {step < steps.length - 1 ? (
                     <>
-                      <div className="builder-section-heading"><p className="eyebrow">Step {step + 1} of {steps.length}</p><h2>{steps[step].label}</h2><p>Required and common settings are shown first. Every remaining argcheck option is available under Advanced.</p></div>
+                      <div className="builder-section-heading"><p className="eyebrow">Step {step + 1} of {steps.length}</p><h2>{steps[step].label}</h2><p>Required and common settings are shown first. Less frequently used controls remain available under Advanced.</p></div>
                       <div className="builder-argument-stack">
                         {steps[step].arguments.map((name) => {
                           const argument = schemaByName.get(name);
@@ -449,7 +459,7 @@ export function TrainingWorkbench({
                     <>
                       <div className="builder-section-heading review-heading"><p className="eyebrow">Final review</p><h2>Your training input</h2><p>Studio keeps the JSON concise: untouched optional values remain DeePMD defaults.</p></div>
                       <div className="review-status-row">
-                        <div className={missing.length ? "review-status warning" : "review-status ready"}>{missing.length ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}<span><strong>{missing.length ? `${missing.length} required fields remain` : "Required fields complete"}</strong><small>{missing.length ? missing.slice(0, 4).join(", ") : "Ready for strict argcheck validation"}</small></span></div>
+                        <div className={missing.length ? "review-status warning" : "review-status ready"}>{missing.length ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}<span><strong>{missing.length ? `${missing.length} required fields remain` : "Required fields complete"}</strong><small>{missing.length ? missing.slice(0, 4).join(", ") : "Ready for a final compatibility check"}</small></span></div>
                         <button className="secondary-button" type="button" disabled={missing.length > 0 || validating} onClick={() => void validateDraft()}>{validating ? <LoaderCircle className="spin" size={14} /> : <FileCheck2 size={14} />} Validate</button>
                       </div>
                       {validation && <InspectionSummary inspection={validation} />}

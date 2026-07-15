@@ -145,6 +145,7 @@ def test_generated_training_input_is_validated_by_argcheck() -> None:
     )
     assert result["valid"] is True
     assert result["summary"]["model"] == "se_e2_a"
+    assert result["summary"]["loss_types"] == ["ener"]
 
 
 def test_legacy_normalize_signature_is_supported(

@@ -3,7 +3,7 @@
 export type JsonScalar = string | number | boolean | null;
 export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
 export type FieldValue = string | boolean;
-export type ViewId = "home" | "workbench" | "tasks" | "runtime";
+export type ViewId = "home" | "workbench" | "tasks" | "runtime" | "examples";
 export type TaskStatus =
   | "queued"
   | "running"
@@ -92,6 +92,7 @@ export interface TrainingInputSummary {
   steps: number;
   systems: string | string[];
   system_count: number;
+  loss_types: string[];
 }
 
 export interface TrainingInputInspection {
@@ -260,6 +261,55 @@ export interface CommandRequest {
   workingDirectory: string;
   environment: Record<string, string>;
   label: string | null;
+  training?: TrainingContext | null;
+}
+
+export interface TrainingContext {
+  inputPath: string | null;
+  totalSteps: number | null;
+  modelType: string | null;
+  lossTypes: string[];
+}
+
+export interface TrainingMetricSample {
+  step: number;
+  phase: string;
+  task: string | null;
+  values: Record<string, number>;
+  learningRate: number | null;
+  timestamp: string;
+}
+
+export interface GpuResourceSample {
+  index: number;
+  name: string;
+  utilizationPercent: number;
+  memoryUsedBytes: number;
+  memoryTotalBytes: number;
+  temperatureCelsius: number | null;
+}
+
+export interface TrainingResourceSample {
+  timestamp: string;
+  cpuPercent: number;
+  processMemoryBytes: number;
+  systemMemoryUsedBytes: number;
+  systemMemoryTotalBytes: number;
+  gpus: GpuResourceSample[];
+}
+
+export interface TrainingSnapshot {
+  context: TrainingContext;
+  currentStep: number;
+  etaSeconds: number | null;
+  stepTimeSeconds: number | null;
+  metrics: TrainingMetricSample[];
+  resources: TrainingResourceSample[];
+}
+
+export interface TrainingUpdate {
+  taskId: string;
+  training: TrainingSnapshot;
 }
 
 export interface TaskSnapshot {
@@ -271,6 +321,30 @@ export interface TaskSnapshot {
   createdAt: string;
   finishedAt: string | null;
   log: string[];
+  training: TrainingSnapshot | null;
+}
+
+export interface ExampleEntry {
+  id: string;
+  path: string;
+  title: string;
+  category: string;
+  modelType: string;
+  lossTypes: string[];
+  totalSteps: number | null;
+  systemCount: number;
+  suggestedBackend: string | null;
+  description: string | null;
+}
+
+export interface ExampleCatalog {
+  entries: ExampleEntry[];
+}
+
+export interface PreparedExample {
+  inputPath: string;
+  workingDirectory: string;
+  workspaceRoot: string;
 }
 
 export type ProcessEventKind = "started" | "stdout" | "stderr" | "finished" | "error";

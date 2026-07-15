@@ -173,6 +173,7 @@ mod tests {
             working_directory: PathBuf::from("."),
             environment: BTreeMap::new(),
             label: None,
+            training: None,
         };
         assert_eq!(
             build_deepmd_arguments(&request),
