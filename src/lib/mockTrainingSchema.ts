@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-import type { InputArgument, InputVariant, JsonValue, TrainingInputSchema } from "../types";
+import type { InputArgument, InputVariant, JsonScalar, JsonValue, TrainingInputSchema } from "../types";
 
 function field(
   name: string,
   type: string[],
   doc: string,
-  options: { optional?: boolean; default?: JsonValue; subFields?: InputArgument[]; variants?: InputVariant[] } = {},
+  options: { optional?: boolean; default?: JsonValue; choices?: JsonScalar[]; subFields?: InputArgument[]; variants?: InputVariant[] } = {},
 ): InputArgument {
   return {
     object: "Argument",
@@ -18,6 +18,7 @@ function field(
     repeat: false,
     sub_fields: Object.fromEntries((options.subFields ?? []).map((item) => [item.name, item])),
     sub_variants: Object.fromEntries((options.variants ?? []).map((item) => [item.flag_name, item])),
+    ...(options.choices ? { choices: options.choices } : {}),
     ...(Object.hasOwn(options, "default") ? { default: options.default } : {}),
   };
 }
@@ -39,13 +40,20 @@ const descriptorDpa4 = field("dpa4", ["dict"], "DPA4 equivariant descriptor.", {
     field("sel", ["int", "str"], "Selected neighbor count or automatic selection.", { default: 256 }),
     field("n_dim", ["int"], "Internal feature dimension.", { default: 128 }),
     field("n_layers", ["int"], "Number of DPA4 blocks.", { default: 4 }),
+    field("activation_function", ["str"], "Activation used by the interaction blocks.", {
+      default: "silu",
+      choices: ["silu", "tanh", "gelu", "relu", "none"],
+    }),
   ],
 });
 const fittingDpa4 = field("dpa4_ener", ["dict"], "DPA4 energy fitting network.", {
   optional: false,
   subFields: [
     field("neuron", ["list"], "Hidden layer widths.", { default: [240, 240, 240] }),
-    field("precision", ["str"], "Parameter precision.", { default: "float32" }),
+    field("precision", ["str"], "Parameter precision.", {
+      default: "float32",
+      choices: ["default", "float32", "float16", "bfloat16", "float64"],
+    }),
   ],
 });
 const standardModel = field("standard", ["dict"], "Standard DeePMD model.", {

@@ -75,6 +75,7 @@ export interface InputArgument {
   repeat: boolean;
   sub_fields: Record<string, InputArgument>;
   sub_variants: Record<string, InputVariant>;
+  choices?: JsonScalar[];
   default?: JsonValue;
 }
 

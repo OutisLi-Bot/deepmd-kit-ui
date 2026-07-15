@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-import { ChevronDown, FolderPlus, Info, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Check, ChevronDown, FolderPlus, Info, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   COMMON_INPUT_FIELDS,
@@ -12,7 +13,7 @@ import {
   isObject,
 } from "../lib/inputBuilder";
 import { chooseSystemDirectories } from "../lib/studio";
-import type { InputArgument, JsonValue } from "../types";
+import type { InputArgument, JsonScalar, JsonValue } from "../types";
 
 interface InputSchemaFormProps {
   argument: InputArgument;
@@ -49,6 +50,144 @@ function inferListEntry(raw: string): JsonValue {
   if (value === "false") return false;
   if (value === "null") return null;
   return value;
+}
+
+function choiceKey(value: JsonScalar): string {
+  return JSON.stringify(value);
+}
+
+function choiceLabel(value: JsonScalar): string {
+  return value === null ? "null" : String(value);
+}
+
+interface DropdownOption {
+  label: string;
+  value: string;
+}
+
+interface ChoiceDropdownProps {
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  options: DropdownOption[];
+  value: string;
+}
+
+function ChoiceDropdown({ ariaLabel, onChange, options, value }: ChoiceDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
+  const [menuStyle, setMenuStyle] = useState<Record<string, string | number>>({});
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const selected = options[selectedIndex];
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    function positionMenu(): void {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const gap = 7;
+      const edge = 12;
+      const roomBelow = window.innerHeight - rect.bottom - edge - gap;
+      const roomAbove = rect.top - edge - gap;
+      const above = roomBelow < 180 && roomAbove > roomBelow;
+      const available = Math.max(112, above ? roomAbove : roomBelow);
+      setMenuStyle({
+        bottom: above ? window.innerHeight - rect.top + gap : "auto",
+        left: Math.max(edge, Math.min(rect.left, window.innerWidth - rect.width - edge)),
+        maxHeight: Math.min(280, available),
+        top: above ? "auto" : rect.bottom + gap,
+        width: rect.width,
+      });
+    }
+
+    function closeOutside(event: PointerEvent): void {
+      const target = event.target as Node;
+      if (!buttonRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    }
+
+    positionMenu();
+    setHighlighted(selectedIndex);
+    document.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open, selectedIndex]);
+
+  function choose(index: number): void {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+    buttonRef.current?.focus();
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>): void {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) {
+        setOpen(true);
+        return;
+      }
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      setHighlighted((current) => (current + direction + options.length) % options.length);
+      return;
+    }
+    if (event.key === "Enter" && open) {
+      event.preventDefault();
+      choose(highlighted);
+    } else if (event.key === "Escape" && open) {
+      event.preventDefault();
+      setOpen(false);
+    } else if (event.key === "Tab") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="choice-dropdown">
+      <button
+        ref={buttonRef}
+        aria-controls={open ? listboxId : undefined}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={ariaLabel}
+        className="choice-dropdown-trigger"
+        role="combobox"
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={handleKeyDown}
+      >
+        <span>{selected?.label ?? value}</span>
+        <ChevronDown className={open ? "open" : ""} size={16} />
+      </button>
+      {open && createPortal(
+        <div ref={menuRef} className="choice-dropdown-menu" id={listboxId} role="listbox" style={menuStyle}>
+          {options.map((option, index) => (
+            <button
+              aria-selected={option.value === value}
+              className={`choice-dropdown-option${index === highlighted ? " highlighted" : ""}`}
+              key={option.value}
+              role="option"
+              type="button"
+              onClick={() => choose(index)}
+              onMouseEnter={() => setHighlighted(index)}
+            >
+              <span>{option.label}</span>
+              {option.value === value && <Check size={15} />}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
 }
 
 function JsonEditor({ value, onChange }: { value: JsonValue; onChange: (value: JsonValue) => void }) {
@@ -157,6 +296,12 @@ function SchemaField({ argument, parent, onParent, path }: SchemaFieldProps) {
     !argument.type.includes("str") && argument.type.some((type) => type === "int" || type === "float")
   );
   const isSystems = argument.name === "systems";
+  const choices = argument.choices ?? [];
+  const isChoice = choices.length > 0 && (
+    value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+  );
+  const selectedChoice = isChoice ? choiceKey(value as JsonScalar) : "";
+  const hasCustomChoice = isChoice && !choices.some((choice) => choiceKey(choice) === selectedChoice);
 
   return (
     <div className="schema-field">
@@ -167,6 +312,19 @@ function SchemaField({ argument, parent, onParent, path }: SchemaFieldProps) {
       <Doc text={argument.doc} />
       {isSystems ? (
         <SystemsEditor value={value} onChange={setValue} />
+      ) : isChoice ? (
+        <ChoiceDropdown
+          ariaLabel={label}
+          value={selectedChoice}
+          options={[
+            ...(hasCustomChoice ? [{ value: selectedChoice, label: `${choiceLabel(value as JsonScalar)} · custom` }] : []),
+            ...choices.map((choice) => ({ value: choiceKey(choice), label: choiceLabel(choice) })),
+          ]}
+          onChange={(next) => {
+            const selected = choices.find((choice) => choiceKey(choice) === next);
+            if (selected !== undefined) setValue(selected);
+          }}
+        />
       ) : isBoolean ? (
         <label className="schema-switch">
           <input type="checkbox" checked={value} onChange={(event) => setValue(event.target.checked)} />
@@ -217,18 +375,21 @@ function InputObjectFields({ argument, value, onChange, path }: InputSchemaFormP
       {Object.values(argument.sub_variants).map((variant) => {
         const selected = typeof value[variant.flag_name] === "string" ? String(value[variant.flag_name]) : variant.default_tag;
         return (
-          <label className="schema-variant" key={variant.flag_name}>
+          <div className="schema-variant" key={variant.flag_name}>
             <span><strong>{displayName(variant.flag_name)}</strong><small>Controls the available settings below</small></span>
-            <div className="select-wrap">
-              <select value={selected} onChange={(event) => onChange(changeVariant(argument, value, variant, event.target.value))}>
-                {!selected && <option value="">Choose…</option>}
-                {Object.entries(variant.choice_dict).map(([tag, choice]) => (
-                  <option key={tag} value={tag}>{displayName(tag)}{choice.alias.length ? ` · ${choice.alias.join(", ")}` : ""}</option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </label>
+            <ChoiceDropdown
+              ariaLabel={displayName(variant.flag_name)}
+              value={selected}
+              options={[
+                ...(!selected ? [{ value: "", label: "Choose…" }] : []),
+                ...Object.entries(variant.choice_dict).map(([tag, choice]) => ({
+                  value: tag,
+                  label: `${displayName(tag)}${choice.alias.length ? ` · ${choice.alias.join(", ")}` : ""}`,
+                })),
+              ]}
+              onChange={(next) => onChange(changeVariant(argument, value, variant, next))}
+            />
+          </div>
         );
       })}
 

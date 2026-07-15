@@ -79,6 +79,57 @@ def test_training_schema_is_argcheck_driven_without_nvnmd() -> None:
     assert "dpa4" in model_types
 
 
+def test_training_schema_exposes_closed_value_choices() -> None:
+    """Finite argcheck constraints become version-matched select options."""
+    schema = build_training_schema()
+
+    def walk(argument: dict) -> list[dict]:
+        nested = [argument]
+        for field in argument["sub_fields"].values():
+            nested.extend(walk(field))
+        for variant in argument["sub_variants"].values():
+            for choice in variant["choice_dict"].values():
+                nested.extend(walk(choice))
+        return nested
+
+    fields = [
+        field
+        for argument in schema["arguments"]
+        for field in walk(argument)
+    ]
+    activation_choices = [
+        field["choices"]
+        for field in fields
+        if field["name"] == "activation_function" and "choices" in field
+    ]
+    assert any("silu" in choices and "tanh" in choices for choices in activation_choices)
+    assert any(
+        field["name"] == "precision"
+        and {"default", "float32", "float64"}.issubset(field.get("choices", []))
+        for field in fields
+    )
+    assert any(
+        field["name"] == "so2_attn_res"
+        and field.get("choices") == ["none", "independent", "dependent"]
+        for field in fields
+    )
+    assert any(
+        field["name"] == "stat_file_mode"
+        and field.get("choices") == ["read", "update"]
+        for field in fields
+    )
+    assert any(
+        field["name"] == "update_style"
+        and field.get("choices") == ["res_avg", "res_incr", "res_residual"]
+        for field in fields
+    )
+    assert not any(
+        choice.lower().rstrip(".") == "currently"
+        for field in fields
+        for choice in field.get("choices", [])
+    )
+
+
 def test_generated_training_input_is_validated_by_argcheck() -> None:
     result = validate_training_input(
         {

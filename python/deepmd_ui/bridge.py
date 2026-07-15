@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import sys
 from collections.abc import (
     Sequence,
@@ -313,6 +314,82 @@ def build_catalog() -> dict[str, Any]:
     }
 
 
+_CHOICE_SEGMENT_PATTERNS = (
+    re.compile(
+        r"\bmust be (?:one of|either)\s+(.*?)(?=(?:\.\s)|$)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\bsupported (?:activation functions|options)\s+are\s*:?\s*"
+        r"(.*?)(?=(?:\.\s)|$)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\boptions\s*:\s*(.*?)(?=(?:\.\s)|$)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+)
+_QUOTED_CHOICE_PATTERN = re.compile(r"[\"']([^\"']+)[\"']")
+_DASHED_CHOICE_PATTERN = re.compile(r"-\s*[\"']([^\"']+)[\"']")
+_BARE_CHOICE_PATTERN = re.compile(
+    r"[A-Za-z][A-Za-z0-9_:+-]*(?:\.[A-Za-z0-9_:+-]+)*"
+)
+_CHOICE_STOPWORDS = {
+    "and",
+    "currently",
+    "following",
+    "only",
+    "or",
+}
+
+
+def _extract_choices(text: str) -> list[str]:
+    """Extract a closed set of documented values from one constraint string."""
+    for pattern in _CHOICE_SEGMENT_PATTERNS:
+        match = pattern.search(text)
+        if match is None:
+            continue
+        segment = match.group(1)
+        dashed = _DASHED_CHOICE_PATTERN.findall(text[match.start(1) :])
+        if len(dashed) > 1:
+            return list(dict.fromkeys(candidate.strip() for candidate in dashed))
+        quoted = _QUOTED_CHOICE_PATTERN.findall(segment)
+        candidates = quoted or [
+            token
+            for token in _BARE_CHOICE_PATTERN.findall(segment)
+            if token.lower() not in _CHOICE_STOPWORDS
+        ]
+        return list(dict.fromkeys(candidate.strip() for candidate in candidates))
+    return []
+
+
+def _enrich_argument_choices(serialized: dict[str, Any], argument: Any) -> None:
+    """Restore finite-value metadata omitted by ``dargs.Argument.gen_json``."""
+    if "str" in serialized.get("type", []):
+        constraint = str(getattr(argument, "extra_check_errmsg", "") or "")
+        choices = _extract_choices(constraint) or _extract_choices(
+            str(getattr(argument, "doc", "") or "")
+        )
+        if choices:
+            serialized["choices"] = choices
+
+    live_fields = getattr(argument, "sub_fields", {})
+    for name, field in serialized.get("sub_fields", {}).items():
+        live_field = live_fields.get(name)
+        if live_field is not None:
+            _enrich_argument_choices(field, live_field)
+
+    live_variants = getattr(argument, "sub_variants", {})
+    for flag_name, variant in serialized.get("sub_variants", {}).items():
+        live_variant = live_variants.get(flag_name)
+        if live_variant is None:
+            continue
+        for tag, choice in variant.get("choice_dict", {}).items():
+            live_choice = live_variant.choice_dict.get(tag)
+            if live_choice is not None:
+                _enrich_argument_choices(choice, live_choice)
+
+
 def build_training_schema() -> dict[str, Any]:
     """Return the authoritative, version-matched training argument tree.
 
@@ -320,14 +397,31 @@ def build_training_schema() -> dict[str, Any]:
     required fields, and the documentation written in DeePMD's ``argcheck``.
     NVNMD is deliberately omitted because DeePMD Studio ships modern Python
     backends only.
-    """
-    from deepmd.utils.argcheck import gen_json
 
+    Returns
+    -------
+    dict[str, Any]
+        Versioned dargs tree enriched with finite scalar choices for GUI controls.
+    """
+    from deepmd.utils.argcheck import (
+        gen_args,
+        gen_json,
+    )
+
+    # === Step.1 Serialize the authoritative dargs tree ===
     arguments = [
         argument
         for argument in json.loads(gen_json())
         if argument.get("name") != "nvnmd"
     ]
+
+    # === Step.2 Restore validation choices that dargs omits from JSON ===
+    live_arguments = {argument.name: argument for argument in gen_args()}
+    for argument in arguments:
+        live_argument = live_arguments.get(argument["name"])
+        if live_argument is not None:
+            _enrich_argument_choices(argument, live_argument)
+
     return {
         "schema_version": 1,
         "deepmd_version": DEEPMD_VERSION,

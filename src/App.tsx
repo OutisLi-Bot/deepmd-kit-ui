@@ -2,6 +2,7 @@
 
 import { AlertTriangle, LoaderCircle, Moon, RefreshCw, Sun, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { DeePMDMark } from "./components/Icons";
 import { Sidebar } from "./components/Sidebar";
@@ -13,6 +14,7 @@ import {
   getRuntimeReport,
   getRuntimeSummary,
   getSystemReport,
+  isDesktop,
   listTasks,
   startTask,
   subscribeToTaskEvents,
@@ -133,6 +135,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("deepmd-studio-theme", theme);
+    if (isDesktop) {
+      void getCurrentWindow().setTheme(theme).catch(() => undefined);
+    }
   }, [theme]);
 
   useEffect(() => {
