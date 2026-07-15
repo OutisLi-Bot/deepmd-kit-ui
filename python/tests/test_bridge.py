@@ -92,17 +92,15 @@ def test_training_schema_exposes_closed_value_choices() -> None:
                 nested.extend(walk(choice))
         return nested
 
-    fields = [
-        field
-        for argument in schema["arguments"]
-        for field in walk(argument)
-    ]
+    fields = [field for argument in schema["arguments"] for field in walk(argument)]
     activation_choices = [
         field["choices"]
         for field in fields
         if field["name"] == "activation_function" and "choices" in field
     ]
-    assert any("silu" in choices and "tanh" in choices for choices in activation_choices)
+    assert any(
+        "silu" in choices and "tanh" in choices for choices in activation_choices
+    )
     assert any(
         field["name"] == "precision"
         and {"default", "float32", "float64"}.issubset(field.get("choices", []))
@@ -114,8 +112,7 @@ def test_training_schema_exposes_closed_value_choices() -> None:
         for field in fields
     )
     assert any(
-        field["name"] == "stat_file_mode"
-        and field.get("choices") == ["read", "update"]
+        field["name"] == "stat_file_mode" and field.get("choices") == ["read", "update"]
         for field in fields
     )
     assert any(

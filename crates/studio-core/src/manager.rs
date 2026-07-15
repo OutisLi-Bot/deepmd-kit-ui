@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{PythonRuntime, managed_runtime_root};
 
 const OFFICIAL_REPOSITORY: &str = "https://github.com/deepmodeling/deepmd-kit.git";
-const APPLICATION_REPOSITORY_SLUG: &str = "OutisLiPKU/deepmd-kit-ui";
+const APPLICATION_REPOSITORY_SLUG: &str = "OutisLi-Bot/deepmd-kit-ui";
 
 /// DeePMD source selection policy for a managed runtime.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

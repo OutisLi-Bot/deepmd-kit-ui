@@ -9,7 +9,7 @@ version = "0.1.0"
 edition = "2024"
 license = "LGPL-3.0-or-later"
 authors = ["DeepModeling"]
-repository = "https://github.com/OutisLiPKU/deepmd-kit-ui"
+repository = "https://github.com/OutisLi-Bot/deepmd-kit-ui"
 
 [workspace.dependencies]
 anyhow = "1.0.100"

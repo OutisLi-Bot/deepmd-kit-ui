@@ -21,7 +21,7 @@ from typing import Any
 OFFICIAL_REPOSITORY = "https://github.com/deepmodeling/deepmd-kit.git"
 OFFICIAL_SLUG = "deepmodeling/deepmd-kit"
 DEFAULT_GITHUB_PROXY = "https://gh-proxy.com"
-APPLICATION_REPOSITORY_SLUG = "OutisLiPKU/deepmd-kit-ui"
+APPLICATION_REPOSITORY_SLUG = "OutisLi-Bot/deepmd-kit-ui"
 
 
 def _github_slug(repository: str) -> str:

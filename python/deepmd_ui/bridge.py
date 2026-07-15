@@ -331,9 +331,7 @@ _CHOICE_SEGMENT_PATTERNS = (
 )
 _QUOTED_CHOICE_PATTERN = re.compile(r"[\"']([^\"']+)[\"']")
 _DASHED_CHOICE_PATTERN = re.compile(r"-\s*[\"']([^\"']+)[\"']")
-_BARE_CHOICE_PATTERN = re.compile(
-    r"[A-Za-z][A-Za-z0-9_:+-]*(?:\.[A-Za-z0-9_:+-]+)*"
-)
+_BARE_CHOICE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_:+-]*(?:\.[A-Za-z0-9_:+-]+)*")
 _CHOICE_STOPWORDS = {
     "and",
     "currently",

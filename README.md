@@ -2,6 +2,9 @@
 
 # DeePMD Studio
 
+[![Check](https://github.com/OutisLi-Bot/deepmd-kit-ui/actions/workflows/check.yml/badge.svg)](https://github.com/OutisLi-Bot/deepmd-kit-ui/actions/workflows/check.yml)
+[![Build](https://github.com/OutisLi-Bot/deepmd-kit-ui/actions/workflows/build.yml/badge.svg)](https://github.com/OutisLi-Bot/deepmd-kit-ui/actions/workflows/build.yml)
+
 DeePMD Studio is a standalone desktop, terminal, and agent interface for the
 DeePMD-kit Python toolchain. It lives in its own `deepmd-kit-ui` repository and
 does not discover a local DeePMD checkout, Conda environment, system Python, or

@@ -17,7 +17,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
@@ -28,7 +28,12 @@ env:
   DEEPMD_REF: ${{ inputs.deepmd_ref || 'master' }}
 
 jobs:
+  validate:
+    name: Validate source
+    uses: ./.github/workflows/check.yml
+
   bundle:
+    needs: validate
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 240
@@ -46,7 +51,7 @@ jobs:
             bundle: inno
             artifact: windows-x86_64-cuda13
           - name: macOS Apple Silicon
-            os: macos-14
+            os: macos-15
             cibw_build: cp311-macosx_arm64
             rust_target: aarch64-apple-darwin
             runtime_platform: macos
@@ -75,7 +80,7 @@ jobs:
             artifact: linux-x86_64-cuda13
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -105,7 +110,7 @@ jobs:
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
@@ -127,7 +132,7 @@ jobs:
             libfuse2
 
       - name: Build selected DeePMD-kit wheel
-        uses: pypa/cibuildwheel@v3.4.1
+        uses: pypa/cibuildwheel@v4.1
         with:
           package-dir: vendor/deepmd-kit
           output-dir: wheelhouse
@@ -211,8 +216,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: bundle
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: release-assets

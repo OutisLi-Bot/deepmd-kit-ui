@@ -20,8 +20,8 @@ def test_github_repository_urls_are_normalized() -> None:
         == "deepmodeling/deepmd-kit"
     )
     assert (
-        RUNTIME_MANAGER._github_slug("git@github.com:OutisLiPKU/deepmd-kit.git")
-        == "OutisLiPKU/deepmd-kit"
+        RUNTIME_MANAGER._github_slug("git@github.com:OutisLi-Bot/deepmd-kit.git")
+        == "OutisLi-Bot/deepmd-kit"
     )
 
 

@@ -387,14 +387,14 @@ export async function checkApplicationUpdate(githubProxy: string): Promise<Appli
   }
   return {
     schema_version: 1,
-    repository_slug: "OutisLiPKU/deepmd-kit-ui",
+    repository_slug: "OutisLi-Bot/deepmd-kit-ui",
     current_version: "0.1.0",
     latest_version: "0.2.0",
     tag: "v0.2.0",
     update_available: true,
     platform_key: "windows-x86_64",
     asset_name: "DeePMD-Studio-0.2.0-Windows-x64-CUDA13-Setup.exe",
-    asset_url: "https://github.com/OutisLiPKU/deepmd-kit-ui/releases/download/v0.2.0/DeePMD-Studio-0.2.0-Windows-x64-CUDA13-Setup.exe",
+    asset_url: "https://github.com/OutisLi-Bot/deepmd-kit-ui/releases/download/v0.2.0/DeePMD-Studio-0.2.0-Windows-x64-CUDA13-Setup.exe",
     sha256: "3141592653589793238462643383279502884197169399375105820974944592",
     bytes: 1_785_000_000,
     github_proxy: githubProxy,
