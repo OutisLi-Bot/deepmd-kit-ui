@@ -7,6 +7,7 @@ import argparse
 import copy
 import importlib.metadata
 import importlib.util
+import inspect
 import json
 import os
 import platform
@@ -464,7 +465,18 @@ def _training_summary(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_training_input(request: dict[str, Any]) -> dict[str, Any]:
-    """Load or validate a training input with DeePMD's own argcheck logic."""
+    """Load or validate a training input with DeePMD's own argcheck logic.
+
+    Parameters
+    ----------
+    request : dict[str, Any]
+        Bridge request containing either an input object or an input file path.
+
+    Returns
+    -------
+    dict[str, Any]
+        Validation status, normalized summary, and source metadata.
+    """
     try:
         if "path" in request:
             from deepmd.common import j_loader
@@ -483,7 +495,10 @@ def validate_training_input(request: dict[str, Any]) -> dict[str, Any]:
         from deepmd.utils.argcheck import normalize
 
         multi_task = "model_dict" in (data.get("model") or {})
-        normalize(copy.deepcopy(data), multi_task=multi_task, check=True)
+        normalize_options: dict[str, Any] = {"multi_task": multi_task}
+        if "check" in inspect.signature(normalize).parameters:
+            normalize_options["check"] = True
+        normalize(copy.deepcopy(data), **normalize_options)
         return {
             "valid": True,
             "error": None,

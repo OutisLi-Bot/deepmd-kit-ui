@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Tests for the machine-readable DeePMD Studio bridge."""
 
+from typing import Any
+
+import pytest
+
 from deepmd.main import (
     main_parser,
 )
@@ -141,3 +145,23 @@ def test_generated_training_input_is_validated_by_argcheck() -> None:
     )
     assert result["valid"] is True
     assert result["summary"]["model"] == "se_e2_a"
+
+
+def test_legacy_normalize_signature_is_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stable runtimes without the newer check keyword remain valid."""
+    calls: list[bool] = []
+
+    def legacy_normalize(
+        data: dict[str, Any],
+        multi_task: bool = False,
+    ) -> dict[str, Any]:
+        calls.append(multi_task)
+        return data
+
+    monkeypatch.setattr("deepmd.utils.argcheck.normalize", legacy_normalize)
+    result = validate_training_input({"input": {"model": {"type": "standard"}}})
+
+    assert result["valid"] is True
+    assert calls == [False]
