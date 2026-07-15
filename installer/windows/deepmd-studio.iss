@@ -66,7 +66,6 @@ Source: "{#ReleaseDir}\dpstudio.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RuntimeDir}\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#DesktopRoot}\scripts\runtime_manager.py"; DestDir: "{app}\runtime-manager"; Flags: ignoreversion
 Source: "{#DesktopRoot}\python\deepmd_ui\bridge.py"; DestDir: "{app}\bridge"; DestName: "deepmd_ui_bridge.py"; Flags: ignoreversion
-Source: "{#DesktopRoot}\src\assets\fonts\MapleMono-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\DeePMD Studio"; Filename: "{app}\deepmd-studio.exe"; WorkingDir: "{userdocs}"

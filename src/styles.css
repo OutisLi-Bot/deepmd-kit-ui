@@ -1,16 +1,11 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
 
-@font-face {
-  font-family: "Maple Mono NF CN";
-  src: url("./assets/fonts/MapleMonoNormal-NF-CN-Regular.ttf") format("truetype");
-  font-display: block;
-  font-style: normal;
-  font-weight: 400;
-}
-
 :root {
   color-scheme: light;
-  --font-ui: "Maple Mono NF CN", "Microsoft YaHei UI", monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text",
+    "Segoe UI", system-ui, "Helvetica Neue", Arial, "Microsoft YaHei UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", "Cascadia Code",
+    "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace;
   font-family: var(--font-ui);
   font-synthesis: weight;
   text-rendering: optimizeLegibility;
@@ -123,7 +118,7 @@ textarea:focus-visible {
 
 code,
 pre {
-  font-family: var(--font-ui);
+  font-family: var(--font-mono);
 }
 
 ::-webkit-scrollbar {
@@ -708,7 +703,7 @@ pre {
 
 .project-copy strong {
   overflow: hidden;
-  font-family: var(--font-ui);
+  font-family: var(--font-mono);
   font-size: 12.5px;
   font-weight: 500;
   text-overflow: ellipsis;
@@ -1645,7 +1640,7 @@ pre {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   padding: 11px 15px;
   color: #aaaab0;
-  font-family: var(--font-ui);
+  font-family: var(--font-mono);
   font-size: 10.5px;
   word-break: break-all;
 }
@@ -2047,7 +2042,7 @@ pre {
   border-radius: 9px;
   background: var(--surface-soft);
   padding: 0 10px;
-  font-family: var(--font-ui);
+  font-family: var(--font-mono);
   font-size: 10.5px;
 }
 
@@ -3103,7 +3098,7 @@ pre {
 .schema-list-input,
 .schema-json-editor textarea {
   resize: vertical;
-  font-family: var(--font-ui);
+  font-family: var(--font-mono);
   line-height: 1.55;
 }
 

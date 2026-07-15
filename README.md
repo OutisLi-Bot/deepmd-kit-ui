@@ -32,9 +32,9 @@ runtime remains active.
 TensorFlow and LAMMPS are deliberately excluded from the current profile.
 Legacy Utilities and NVNMD training are not exposed by Studio.
 
-The interface embeds Maple Mono NF CN Regular and uses it for all UI, form,
-documentation, and console text. The font is distributed under the SIL Open
-Font License 1.1; its license is included with every packaged application.
+The interface uses platform-native fonts: San Francisco on macOS and Segoe UI
+Variable on modern Windows. Code, logs, paths, and JSON editors use the native
+monospace stack (SF Mono or Cascadia), with no bundled font dependency.
 
 ## Guided training inputs
 
