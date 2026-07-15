@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-import { Check, ChevronDown, FolderPlus, Info, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { ChevronDown, FolderPlus, Info, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   COMMON_INPUT_FIELDS,
@@ -14,6 +13,7 @@ import {
 } from "../lib/inputBuilder";
 import { chooseSystemDirectories } from "../lib/studio";
 import type { InputArgument, JsonScalar, JsonValue } from "../types";
+import { ChoiceSelect } from "./ChoiceSelect";
 
 interface InputSchemaFormProps {
   argument: InputArgument;
@@ -58,136 +58,6 @@ function choiceKey(value: JsonScalar): string {
 
 function choiceLabel(value: JsonScalar): string {
   return value === null ? "null" : String(value);
-}
-
-interface DropdownOption {
-  label: string;
-  value: string;
-}
-
-interface ChoiceDropdownProps {
-  ariaLabel: string;
-  onChange: (value: string) => void;
-  options: DropdownOption[];
-  value: string;
-}
-
-function ChoiceDropdown({ ariaLabel, onChange, options, value }: ChoiceDropdownProps) {
-  const [open, setOpen] = useState(false);
-  const [highlighted, setHighlighted] = useState(0);
-  const [menuStyle, setMenuStyle] = useState<Record<string, string | number>>({});
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const listboxId = useId();
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
-  const selected = options[selectedIndex];
-
-  useEffect(() => {
-    if (!open) return undefined;
-
-    function positionMenu(): void {
-      const rect = buttonRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const gap = 7;
-      const edge = 12;
-      const roomBelow = window.innerHeight - rect.bottom - edge - gap;
-      const roomAbove = rect.top - edge - gap;
-      const above = roomBelow < 180 && roomAbove > roomBelow;
-      const available = Math.max(112, above ? roomAbove : roomBelow);
-      setMenuStyle({
-        bottom: above ? window.innerHeight - rect.top + gap : "auto",
-        left: Math.max(edge, Math.min(rect.left, window.innerWidth - rect.width - edge)),
-        maxHeight: Math.min(280, available),
-        top: above ? "auto" : rect.bottom + gap,
-        width: rect.width,
-      });
-    }
-
-    function closeOutside(event: PointerEvent): void {
-      const target = event.target as Node;
-      if (!buttonRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
-    }
-
-    positionMenu();
-    setHighlighted(selectedIndex);
-    document.addEventListener("pointerdown", closeOutside);
-    window.addEventListener("resize", positionMenu);
-    window.addEventListener("scroll", positionMenu, true);
-    return () => {
-      document.removeEventListener("pointerdown", closeOutside);
-      window.removeEventListener("resize", positionMenu);
-      window.removeEventListener("scroll", positionMenu, true);
-    };
-  }, [open, selectedIndex]);
-
-  function choose(index: number): void {
-    const option = options[index];
-    if (!option) return;
-    onChange(option.value);
-    setOpen(false);
-    buttonRef.current?.focus();
-  }
-
-  function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>): void {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!open) {
-        setOpen(true);
-        return;
-      }
-      const direction = event.key === "ArrowDown" ? 1 : -1;
-      setHighlighted((current) => (current + direction + options.length) % options.length);
-      return;
-    }
-    if (event.key === "Enter" && open) {
-      event.preventDefault();
-      choose(highlighted);
-    } else if (event.key === "Escape" && open) {
-      event.preventDefault();
-      setOpen(false);
-    } else if (event.key === "Tab") {
-      setOpen(false);
-    }
-  }
-
-  return (
-    <div className="choice-dropdown">
-      <button
-        ref={buttonRef}
-        aria-controls={open ? listboxId : undefined}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        aria-label={ariaLabel}
-        className="choice-dropdown-trigger"
-        role="combobox"
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        onKeyDown={handleKeyDown}
-      >
-        <span>{selected?.label ?? value}</span>
-        <ChevronDown className={open ? "open" : ""} size={16} />
-      </button>
-      {open && createPortal(
-        <div ref={menuRef} className="choice-dropdown-menu" id={listboxId} role="listbox" style={menuStyle}>
-          {options.map((option, index) => (
-            <button
-              aria-selected={option.value === value}
-              className={`choice-dropdown-option${index === highlighted ? " highlighted" : ""}`}
-              key={option.value}
-              role="option"
-              type="button"
-              onClick={() => choose(index)}
-              onMouseEnter={() => setHighlighted(index)}
-            >
-              <span>{option.label}</span>
-              {option.value === value && <Check size={15} />}
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )}
-    </div>
-  );
 }
 
 function JsonEditor({ value, onChange }: { value: JsonValue; onChange: (value: JsonValue) => void }) {
@@ -313,7 +183,7 @@ function SchemaField({ argument, parent, onParent, path }: SchemaFieldProps) {
       {isSystems ? (
         <SystemsEditor value={value} onChange={setValue} />
       ) : isChoice ? (
-        <ChoiceDropdown
+        <ChoiceSelect
           ariaLabel={label}
           value={selectedChoice}
           options={[
@@ -377,7 +247,7 @@ function InputObjectFields({ argument, value, onChange, path }: InputSchemaFormP
         return (
           <div className="schema-variant" key={variant.flag_name}>
             <span><strong>{displayName(variant.flag_name)}</strong><small>Controls the available settings below</small></span>
-            <ChoiceDropdown
+            <ChoiceSelect
               ariaLabel={displayName(variant.flag_name)}
               value={selected}
               options={[

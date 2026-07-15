@@ -395,6 +395,7 @@ enum TuiSection {
 struct TuiApp {
     workflows: Vec<Workflow>,
     examples: Vec<ExampleEntry>,
+    examples_root: PathBuf,
     workflow_state: ListState,
     example_state: ListState,
     section: TuiSection,
@@ -409,6 +410,7 @@ impl TuiApp {
     fn new(
         workflows: Vec<Workflow>,
         examples: Vec<ExampleEntry>,
+        examples_root: PathBuf,
         backend: String,
         workdir: PathBuf,
     ) -> Self {
@@ -423,6 +425,7 @@ impl TuiApp {
         Self {
             workflows,
             examples,
+            examples_root,
             workflow_state,
             example_state,
             section: TuiSection::Workflows,
@@ -489,7 +492,7 @@ async fn run_tui(
         .collect();
     let examples_root = active_examples_root(&runtime, resource_dir);
     let examples = list_examples(&examples_root)?.entries;
-    let mut app = TuiApp::new(workflows, examples, backend, workdir);
+    let mut app = TuiApp::new(workflows, examples, examples_root.clone(), backend, workdir);
     loop {
         let action = run_tui_session(&mut app)?;
         match action {
@@ -681,8 +684,12 @@ fn render_tui(frame: &mut ratatui::Frame<'_>, app: &mut TuiApp) {
         TuiSection::Examples => app
             .selected_example()
             .map(|example| {
+                let source_directory = Path::new(&example.path)
+                    .parent()
+                    .map(|parent| app.examples_root.join(parent))
+                    .unwrap_or_else(|| app.examples_root.clone());
                 format!(
-                    "{}\n\nModel: {}\nLoss: {}\nSteps: {}\nSystems: {}\n\n{}\n\nA private writable copy is created before training.",
+                    "{}\n\nModel: {}\nLoss: {}\nSteps: {}\nSystems: {}\nSource: {}\n\n{}\n\nA private writable copy is created before training.",
                     example.title,
                     example.model_type,
                     example.loss_types.join(", "),
@@ -691,6 +698,7 @@ fn render_tui(frame: &mut ratatui::Frame<'_>, app: &mut TuiApp) {
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "adaptive".into()),
                     example.system_count,
+                    source_directory.display(),
                     example
                         .description
                         .as_deref()
@@ -922,10 +930,11 @@ fn render_training_tui(
     };
     frame.render_widget(
         Paragraph::new(format!(
-            " DeePMD Studio  •  {}  •  {}  •  {:.0}s",
+            " DeePMD Studio  •  {}  •  {}  •  {:.0}s\n Directory: {}",
             title,
             state.content,
-            elapsed.as_secs_f64()
+            elapsed.as_secs_f64(),
+            request.working_directory.display()
         ))
         .bold()
         .block(Block::default().borders(Borders::BOTTOM)),

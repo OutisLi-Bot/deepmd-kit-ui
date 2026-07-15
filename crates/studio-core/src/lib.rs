@@ -9,8 +9,8 @@ mod training;
 mod types;
 
 pub use examples::{
-    ExampleCatalog, ExampleEntry, PreparedExample, list_examples, prepare_example,
-    read_example_file,
+    ExampleCatalog, ExampleEntry, PreparedExample, example_directory, list_examples,
+    prepare_example, read_example_file,
 };
 pub use manager::{
     ApplicationDownloadResult, ApplicationUpdatePlan, RuntimeChannel, RuntimeInstallResult,

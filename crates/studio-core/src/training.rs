@@ -38,6 +38,13 @@ pub fn parse_training_line(line: &str) -> Option<TrainingMetricSample> {
     let step_match = STEP_PATTERN.captures(line)?;
     let whole_match = step_match.get(0)?;
     let step = step_match.get(1)?.as_str().parse::<u64>().ok()?;
+    if line[whole_match.end()..]
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("total wall time")
+    {
+        return None;
+    }
     let metric_matches = METRIC_PATTERN.captures_iter(&line[whole_match.end()..]);
     let mut values = BTreeMap::new();
     let mut learning_rate = None;
@@ -321,6 +328,11 @@ mod tests {
         assert_eq!(snapshot.current_step, 500);
         assert_eq!(snapshot.step_time_seconds, Some(0.004));
         assert_eq!(snapshot.eta_seconds, Some(90));
+        assert!(snapshot.metrics.is_empty());
+        assert!(parse_training_line(
+            "Batch     500: total wall time = 2.00 s, avg = 0.0040 s/step, eta = 0:01:30 at 2026-07-15 10:00"
+        )
+        .is_none());
     }
 
     #[test]

@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { CommandForm } from "../components/CommandForm";
+import { ChoiceSelect } from "../components/ChoiceSelect";
 import { WorkflowIcon } from "../components/Icons";
 import { buildArguments, defaultFieldValues, quoteArgument } from "../lib/arguments";
 import { chooseInputPath } from "../lib/studio";
@@ -226,18 +227,18 @@ export function Workbench({
             <span className="ready-label"><Check size={12} /> Runtime ready</span>
           </div>
 
-          <label className="run-control">
+          <div className="run-control">
             <span>Backend</span>
-            <div className="select-wrap">
-              <select value={backend} onChange={(event) => onBackend(event.target.value)}>
-                {backends.map((item) => {
-                  const available = runtimeBackends.get(item.id) ?? false;
-                  return <option key={item.id} value={item.id} disabled={!available}>{item.id}{available ? "" : " · unavailable"}</option>;
-                })}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </label>
+            <ChoiceSelect
+              ariaLabel="Command backend"
+              value={backend}
+              options={backends.map((item) => {
+                const available = runtimeBackends.get(item.id) ?? false;
+                return { value: item.id, label: item.id, description: available ? "Available" : "Not installed", disabled: !available };
+              })}
+              onChange={onBackend}
+            />
+          </div>
 
           <label className="run-control">
             <span>Working directory</span>

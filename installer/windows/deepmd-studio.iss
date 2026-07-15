@@ -2,7 +2,7 @@
 ; Large, fully offline Windows installer for DeePMD Studio.
 
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #define AppVersion "0.2.1"
 #endif
 
 #ifndef TargetTriple

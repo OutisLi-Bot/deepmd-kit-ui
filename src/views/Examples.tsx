@@ -13,18 +13,32 @@ import {
   Gauge,
   Layers3,
   LoaderCircle,
+  PanelLeftClose,
   Play,
+  RotateCcw,
   Search,
   Sparkles,
+  WandSparkles,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 
-import { getExamples, prepareExample, readExampleFile } from "../lib/studio";
+import { ChoiceSelect } from "../components/ChoiceSelect";
+import {
+  getExampleDirectory,
+  getExamples,
+  openLocalPath,
+  prepareExample,
+  readExampleFile,
+  saveTrainingInput,
+  validateTrainingInput,
+} from "../lib/studio";
 import type {
   BackendDefinition,
   CommandRequest,
   ExampleCatalog,
   ExampleEntry,
+  JsonValue,
   RuntimeReport,
 } from "../types";
 
@@ -44,6 +58,11 @@ interface ExampleFolder {
   entries: ExampleEntry[];
 }
 
+interface ParsedDraft {
+  input: Record<string, JsonValue> | null;
+  error: string | null;
+}
+
 function buildTree(entries: ExampleEntry[]): ExampleFolder {
   const root: ExampleFolder = { name: "Examples", path: "", folders: new Map(), entries: [] };
   for (const entry of entries) {
@@ -61,6 +80,16 @@ function buildTree(entries: ExampleEntry[]): ExampleFolder {
   return root;
 }
 
+function folderEntryCount(folder: ExampleFolder): number {
+  return folder.entries.length + [...folder.folders.values()]
+    .reduce((count, child) => count + folderEntryCount(child), 0);
+}
+
+function parentPaths(entry: ExampleEntry): string[] {
+  const parts = entry.path.split("/").slice(0, -1);
+  return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+}
+
 function displayFolder(value: string): string {
   return value
     .split(/[_-]/)
@@ -73,6 +102,68 @@ function formatSteps(steps: number | null): string {
   return steps == null ? "Adaptive" : new Intl.NumberFormat().format(steps);
 }
 
+function parseDraft(source: string): ParsedDraft {
+  try {
+    const value = JSON.parse(source) as JsonValue;
+    if (!value || Array.isArray(value) || typeof value !== "object") {
+      return { input: null, error: "The training input must be a JSON object." };
+    }
+    return { input: value as Record<string, JsonValue>, error: null };
+  } catch (reason) {
+    return { input: null, error: reason instanceof Error ? reason.message : String(reason) };
+  }
+}
+
+function draftFacts(input: Record<string, JsonValue> | null, fallback: ExampleEntry) {
+  if (!input) {
+    return {
+      modelType: fallback.modelType,
+      lossTypes: fallback.lossTypes,
+      totalSteps: fallback.totalSteps,
+      systemCount: fallback.systemCount,
+    };
+  }
+  const model = typeof input.model === "object" && input.model && !Array.isArray(input.model)
+    ? input.model as Record<string, JsonValue>
+    : {};
+  const descriptor = typeof model.descriptor === "object" && model.descriptor && !Array.isArray(model.descriptor)
+    ? model.descriptor as Record<string, JsonValue>
+    : {};
+  const training = typeof input.training === "object" && input.training && !Array.isArray(input.training)
+    ? input.training as Record<string, JsonValue>
+    : {};
+  const trainingData = typeof training.training_data === "object" && training.training_data && !Array.isArray(training.training_data)
+    ? training.training_data as Record<string, JsonValue>
+    : {};
+  const systems = trainingData.systems;
+  const lossTypes = new Set<string>();
+  const loss = typeof input.loss === "object" && input.loss && !Array.isArray(input.loss)
+    ? input.loss as Record<string, JsonValue>
+    : null;
+  if (typeof loss?.type === "string") lossTypes.add(loss.type);
+  const lossDict = typeof input.loss_dict === "object" && input.loss_dict && !Array.isArray(input.loss_dict)
+    ? input.loss_dict as Record<string, JsonValue>
+    : null;
+  for (const item of Object.values(lossDict ?? {})) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const lossType = (item as Record<string, JsonValue>).type;
+      lossTypes.add(typeof lossType === "string" ? lossType : "ener");
+    }
+  }
+  const stepKeys = ["numb_steps", "num_steps", "num_step", "numb_step", "stop_batch"];
+  const totalSteps = stepKeys
+    .map((key) => training[key])
+    .find((value): value is number => typeof value === "number" && Number.isFinite(value));
+  return {
+    modelType: model.model_dict ? "Multi-task" : typeof model.type === "string" && model.type !== "standard"
+      ? model.type
+      : typeof descriptor.type === "string" ? descriptor.type : fallback.modelType,
+    lossTypes: lossTypes.size ? [...lossTypes] : fallback.lossTypes,
+    totalSteps: totalSteps ?? fallback.totalSteps,
+    systemCount: Array.isArray(systems) ? systems.length : typeof systems === "string" && systems ? 1 : fallback.systemCount,
+  };
+}
+
 function ExampleTree({
   folder,
   depth,
@@ -83,14 +174,16 @@ function ExampleTree({
 }: {
   folder: ExampleFolder;
   depth: number;
-  expanded: Set<string>;
+  expanded: ReadonlySet<string>;
   selectedId: string | null;
   onToggle: (path: string) => void;
   onSelect: (entry: ExampleEntry) => void;
 }) {
+  const folders = [...folder.folders.values()].sort((left, right) => left.name.localeCompare(right.name));
+  const entries = [...folder.entries].sort((left, right) => left.path.localeCompare(right.path));
   return (
     <>
-      {[...folder.folders.values()].map((child) => {
+      {folders.map((child) => {
         const open = expanded.has(child.path);
         return (
           <div className="example-tree-branch" key={child.path}>
@@ -104,7 +197,7 @@ function ExampleTree({
               {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               {open ? <FolderOpen size={16} /> : <Folder size={16} />}
               <span>{displayFolder(child.name)}</span>
-              <small>{child.entries.length + [...child.folders.values()].reduce((count, item) => count + item.entries.length, 0)}</small>
+              <small>{folderEntryCount(child)}</small>
             </button>
             {open && (
               <ExampleTree
@@ -119,7 +212,7 @@ function ExampleTree({
           </div>
         );
       })}
-      {folder.entries.map((entry) => (
+      {entries.map((entry) => (
         <button
           className={selectedId === entry.id ? "example-file-row active" : "example-file-row"}
           key={entry.id}
@@ -149,7 +242,9 @@ export function Examples({
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [preview, setPreview] = useState("");
+  const [sourceText, setSourceText] = useState("");
+  const [draft, setDraft] = useState("");
+  const [sourceDirectory, setSourceDirectory] = useState("");
   const [previewing, setPreviewing] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -160,12 +255,8 @@ export function Examples({
       .then((result) => {
         if (disposed) return;
         setCatalog(result);
-        const first = result.entries.at(0);
-        setSelectedId(first?.id ?? null);
-        setExpanded(new Set(result.entries.flatMap((entry) => {
-          const parts = entry.path.split("/").slice(0, -1);
-          return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
-        })));
+        setSelectedId(result.entries.at(0)?.id ?? null);
+        setExpanded(new Set());
       })
       .catch((reason: unknown) => {
         if (!disposed) setLoadError(reason instanceof Error ? reason.message : String(reason));
@@ -180,29 +271,42 @@ export function Examples({
         .some((value) => value.toLowerCase().includes(normalized)),
     );
   }, [catalog, query]);
-  const selected = catalog?.entries.find((entry) => entry.id === selectedId) ?? filtered.at(0) ?? null;
+  const selected = filtered.find((entry) => entry.id === selectedId) ?? filtered.at(0) ?? null;
   const tree = useMemo(() => buildTree(filtered), [filtered]);
+  const visibleExpanded = useMemo(() => {
+    if (!query.trim()) return expanded;
+    return new Set(filtered.flatMap(parentPaths));
+  }, [expanded, filtered, query]);
   const runtimeBackends = new Map(runtime.backends.map((item) => [item.id, item.available]));
+  const parsed = useMemo(() => parseDraft(draft), [draft]);
+  const facts = selected ? draftFacts(parsed.input, selected) : null;
+  const modified = draft !== sourceText;
 
   useEffect(() => {
     if (!selected) {
-      setPreview("");
+      setSourceText("");
+      setDraft("");
+      setSourceDirectory("");
       return;
     }
     let disposed = false;
     setPreviewing(true);
     setRunError(null);
-    void readExampleFile(selected.path)
-      .then((content) => {
+    void Promise.all([readExampleFile(selected.path), getExampleDirectory(selected.path)])
+      .then(([content, directory]) => {
         if (disposed) return;
+        let formatted = content;
         try {
-          setPreview(JSON.stringify(JSON.parse(content), null, 2));
+          formatted = `${JSON.stringify(JSON.parse(content), null, 2)}\n`;
         } catch {
-          setPreview(content);
+          // The editor exposes the original text when formatting is unavailable.
         }
+        setSourceText(formatted);
+        setDraft(formatted);
+        setSourceDirectory(directory);
       })
       .catch((reason: unknown) => {
-        if (!disposed) setPreview(`Unable to preview this input.\n\n${reason instanceof Error ? reason.message : String(reason)}`);
+        if (!disposed) setRunError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => { if (!disposed) setPreviewing(false); });
     return () => { disposed = true; };
@@ -210,6 +314,7 @@ export function Examples({
 
   function selectEntry(entry: ExampleEntry): void {
     setSelectedId(entry.id);
+    setExpanded((current) => new Set([...current, ...parentPaths(entry)]));
     if (entry.suggestedBackend && runtimeBackends.get(entry.suggestedBackend)) {
       onBackend(entry.suggestedBackend);
     }
@@ -224,12 +329,36 @@ export function Examples({
     });
   }
 
+  function formatDraft(): void {
+    if (!parsed.input) return;
+    setDraft(`${JSON.stringify(parsed.input, null, 2)}\n`);
+  }
+
+  function handleEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    const target = event.currentTarget;
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+    setDraft(`${draft.slice(0, start)}  ${draft.slice(end)}`);
+    window.requestAnimationFrame(() => {
+      target.selectionStart = start + 2;
+      target.selectionEnd = start + 2;
+    });
+  }
+
   async function runExample(): Promise<void> {
-    if (!selected) return;
+    if (!selected || !parsed.input) {
+      setRunError(parsed.error ?? "The edited input is not valid JSON.");
+      return;
+    }
     setPreparing(true);
     setRunError(null);
     try {
+      const validation = await validateTrainingInput(parsed.input);
+      if (!validation.valid) throw new Error(validation.error ?? "The edited training input is invalid.");
       const prepared = await prepareExample(selected.id);
+      await saveTrainingInput(prepared.inputPath, parsed.input);
       onWorkingDirectory(prepared.workingDirectory);
       await onRun({
         backend,
@@ -240,9 +369,9 @@ export function Examples({
         label: `Example · ${selected.title}`,
         training: {
           inputPath: prepared.inputPath,
-          totalSteps: selected.totalSteps,
-          modelType: selected.modelType,
-          lossTypes: selected.lossTypes,
+          totalSteps: validation.summary?.steps ?? facts?.totalSteps ?? null,
+          modelType: validation.summary?.model ?? facts?.modelType ?? null,
+          lossTypes: validation.summary?.loss_types ?? facts?.lossTypes ?? [],
         },
       });
     } catch (reason) {
@@ -262,7 +391,7 @@ export function Examples({
         <div>
           <p className="eyebrow">Learn by running</p>
           <h1>Examples</h1>
-          <p>Browse ready-to-run training inputs, inspect their settings, and launch a writable copy in one click.</p>
+          <p>Browse a ready-made input, adapt it in place, and run a private copy without touching the original.</p>
         </div>
         <div className="examples-count"><BookOpen size={17} /><strong>{catalog?.entries.length ?? 0}</strong><span>training inputs</span></div>
       </header>
@@ -272,15 +401,22 @@ export function Examples({
       ) : catalog?.entries.length ? (
         <div className="examples-layout">
           <aside className="example-browser-card">
-            <div className="example-browser-heading"><span><Layers3 size={16} /><strong>Source tree</strong></span><small>{filtered.length} inputs</small></div>
-            <label className="example-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find model, loss, or path" /></label>
+            <div className="example-browser-heading">
+              <span><Layers3 size={16} /><strong>Source tree</strong></span>
+              <span className="example-tree-actions"><small>{filtered.length} inputs</small><button type="button" onClick={() => setExpanded(new Set())} title="Collapse all folders"><PanelLeftClose size={14} /></button></span>
+            </div>
+            <label className="example-search">
+              <Search size={15} />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find model, loss, or path" />
+              {query && <button type="button" onClick={() => setQuery("")} title="Clear search"><X size={13} /></button>}
+            </label>
             <div className="example-tree">
-              <ExampleTree folder={tree} depth={0} expanded={expanded} selectedId={selected?.id ?? null} onToggle={toggleFolder} onSelect={selectEntry} />
+              <ExampleTree folder={tree} depth={0} expanded={visibleExpanded} selectedId={selected?.id ?? null} onToggle={toggleFolder} onSelect={selectEntry} />
               {!filtered.length && <div className="example-no-results">No training input matches “{query}”.</div>}
             </div>
           </aside>
 
-          {selected && (
+          {selected && facts && (
             <main className="example-detail-card">
               <div className="example-detail-hero">
                 <span className="example-hero-icon"><Sparkles size={23} /></span>
@@ -288,37 +424,58 @@ export function Examples({
               </div>
 
               <div className="example-facts">
-                <div><Sparkles size={16} /><span><small>Model</small><strong>{selected.modelType}</strong></span></div>
-                <div><Gauge size={16} /><span><small>Loss</small><strong>{selected.lossTypes.join(" · ")}</strong></span></div>
-                <div><Clock3 size={16} /><span><small>Steps</small><strong>{formatSteps(selected.totalSteps)}</strong></span></div>
-                <div><FolderOpen size={16} /><span><small>Systems</small><strong>{selected.systemCount || "Dynamic"}</strong></span></div>
+                <div><Sparkles size={16} /><span><small>Model</small><strong>{facts.modelType}</strong></span></div>
+                <div><Gauge size={16} /><span><small>Loss</small><strong>{facts.lossTypes.join(" · ")}</strong></span></div>
+                <div><Clock3 size={16} /><span><small>Steps</small><strong>{formatSteps(facts.totalSteps)}</strong></span></div>
+                <div><FolderOpen size={16} /><span><small>Systems</small><strong>{facts.systemCount || "Dynamic"}</strong></span></div>
               </div>
 
-              <section className="example-preview-card">
-                <header><span><FileJson size={16} /><strong>{selected.path.split("/").at(-1)}</strong></span><small>Read-only preview</small></header>
-                <pre>{previewing ? "Loading input…" : preview}</pre>
+              <section className="example-editor-card">
+                <header>
+                  <span><FileJson size={16} /><strong>{selected.path.split("/").at(-1)}</strong><i>{modified ? "Edited" : "Original"}</i></span>
+                  <div>
+                    <button type="button" disabled={!modified} onClick={() => setDraft(sourceText)}><RotateCcw size={13} /> Revert</button>
+                    <button type="button" disabled={!parsed.input} onClick={formatDraft}><WandSparkles size={13} /> Format</button>
+                  </div>
+                </header>
+                <textarea
+                  aria-label="Editable example training input"
+                  value={previewing ? "Loading input…" : draft}
+                  disabled={previewing}
+                  spellCheck={false}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={handleEditorKeyDown}
+                />
+                <footer className={parsed.error ? "invalid" : "valid"}>
+                  {parsed.error ? <><AlertCircle size={13} /><span>{parsed.error}</span></> : <><CheckCircle2 size={13} /><span>Valid JSON · edits are written to the private run copy</span></>}
+                </footer>
               </section>
 
               <section className="example-launch-card">
-                <div><p className="eyebrow">Ready to run</p><h3>Start this example</h3><p>Studio creates a private writable copy, preserves relative dataset paths, and opens the shared training monitor.</p></div>
-                <label className="run-control">
+                <div className="example-launch-copy"><p className="eyebrow">Ready to run</p><h3>Start this example</h3><p>Studio validates your edited input, copies its data, and opens the shared training monitor.</p></div>
+                <div className="run-control">
                   <span>Backend</span>
-                  <div className="select-wrap">
-                    <select value={backend} onChange={(event) => onBackend(event.target.value)}>
-                      {backends.map((item) => {
-                        const available = runtimeBackends.get(item.id) ?? false;
-                        return <option key={item.id} value={item.id} disabled={!available}>{item.id}{available ? "" : " · unavailable"}</option>;
-                      })}
-                    </select>
-                    <ChevronDown size={15} />
-                  </div>
-                </label>
-                {runError && <div className="validation-message error"><AlertCircle size={15} /><span>{runError}</span></div>}
-                <button className="run-button example-run-button" type="button" disabled={preparing} onClick={() => void runExample()}>
+                  <ChoiceSelect
+                    ariaLabel="Example backend"
+                    value={backend}
+                    options={backends.map((item) => {
+                      const available = runtimeBackends.get(item.id) ?? false;
+                      return { value: item.id, label: item.id, description: available ? "Available" : "Not installed", disabled: !available };
+                    })}
+                    onChange={onBackend}
+                  />
+                </div>
+                <button className="run-button example-run-button" type="button" disabled={preparing || !parsed.input} onClick={() => void runExample()}>
                   {preparing ? <LoaderCircle className="spin" size={17} /> : <Play size={17} fill="currentColor" />}
                   {preparing ? "Preparing workspace…" : "Run example"}
                 </button>
-                <span className="example-safe-note"><CheckCircle2 size={14} /> The bundled source remains unchanged.</span>
+                <div className="example-directory-row">
+                  <FolderOpen size={15} />
+                  <span><small>Source folder</small><code title={sourceDirectory}>{sourceDirectory || "Resolving…"}</code></span>
+                  <button type="button" disabled={!sourceDirectory} onClick={() => void openLocalPath(sourceDirectory)}><FolderOpen size={13} /> Open</button>
+                </div>
+                {runError && <div className="validation-message error"><AlertCircle size={15} /><span>{runError}</span></div>}
+                <span className="example-safe-note"><CheckCircle2 size={14} /> The bundled source remains unchanged; each run gets its own working directory.</span>
               </section>
             </main>
           )}

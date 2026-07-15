@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fieldLabel, isMultiple } from "../lib/arguments";
 import { chooseInputPath, chooseOutputPath } from "../lib/studio";
 import type { CatalogArgument, FieldValue, Workflow } from "../types";
+import { ChoiceSelect } from "./ChoiceSelect";
 
 interface CommandFormProps {
   workflow: Workflow;
@@ -95,17 +96,15 @@ function Field({ argument, value, touched, onChange }: FieldProps) {
       {argument.help && <p className="field-help">{argument.help}</p>}
       <div className="field-control-row">
         {argument.kind === "select" && !isMultiple(argument) ? (
-          <div className="select-wrap">
-            <select {...commonProps}>
-              {argument.default == null && (
-                <option value="">{argument.required ? "Select…" : "Not set"}</option>
-              )}
-              {argument.choices.map((choice) => (
-                <option key={String(choice)} value={String(choice)}>{String(choice)}</option>
-              ))}
-            </select>
-            <ChevronDown aria-hidden="true" size={15} />
-          </div>
+          <ChoiceSelect
+            ariaLabel={label}
+            value={String(value)}
+            options={[
+              ...(argument.default == null ? [{ value: "", label: argument.required ? "Select…" : "Not set" }] : []),
+              ...argument.choices.map((choice) => ({ value: String(choice), label: String(choice) })),
+            ]}
+            onChange={(next) => onChange(next)}
+          />
         ) : isMultiple(argument) ? (
           <textarea
             {...commonProps}

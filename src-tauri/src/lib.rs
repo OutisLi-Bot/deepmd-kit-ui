@@ -14,10 +14,11 @@ use deepmd_studio_core::{
     PreparedExample, ProcessEvent, ProcessEventKind, PythonRuntime, ResourceSampler,
     RuntimeInstallResult, RuntimePlan, RuntimeSettings, TaskSnapshot, TaskStatus,
     TrainingResourceSample, TrainingSnapshot, application_updates_root, build_runtime_arguments,
-    download_application_update as download_application_installer, install_runtime,
-    list_examples as load_examples, load_runtime_settings,
-    prepare_example as prepare_example_workspace, read_example_file as load_example_file,
-    resolve_application_update, resolve_runtime_plan, run_streaming, save_runtime_settings,
+    download_application_update as download_application_installer,
+    example_directory as load_example_directory, install_runtime, list_examples as load_examples,
+    load_runtime_settings, prepare_example as prepare_example_workspace,
+    read_example_file as load_example_file, resolve_application_update, resolve_runtime_plan,
+    run_streaming, save_runtime_settings,
 };
 use directories::UserDirs;
 use serde::Serialize;
@@ -332,6 +333,13 @@ fn read_example_file(state: State<'_, AppState>, path: String) -> Result<String,
 }
 
 #[tauri::command]
+fn get_example_directory(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    load_example_directory(&state.examples_root, &path)
+        .map(|directory| directory.display().to_string())
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 async fn prepare_example(
     state: State<'_, AppState>,
     example_id: String,
@@ -638,6 +646,7 @@ pub fn run() {
             save_training_input,
             list_examples,
             read_example_file,
+            get_example_directory,
             prepare_example,
             get_system_report,
             get_runtime_report,

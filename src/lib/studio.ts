@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 
 import type {
   ApplicationDownloadResult,
@@ -388,6 +389,16 @@ export async function readExampleFile(path: string): Promise<string> {
     loss: { type: entry?.lossTypes[0] ?? "ener" },
     training: { training_data: { systems: ["../data"] }, numb_steps: entry?.totalSteps ?? 100_000 },
   }, null, 2);
+}
+
+export async function getExampleDirectory(path: string): Promise<string> {
+  if (isDesktop) return invoke<string>("get_example_directory", { path });
+  const parent = path.replaceAll("/", "\\").split("\\").slice(0, -1).join("\\");
+  return `C:\\DeePMD Studio\\runtime\\deepmd-ui-examples\\${parent}`;
+}
+
+export async function openLocalPath(path: string): Promise<void> {
+  if (isDesktop) await openPath(path);
 }
 
 export async function prepareExample(exampleId: string): Promise<PreparedExample> {

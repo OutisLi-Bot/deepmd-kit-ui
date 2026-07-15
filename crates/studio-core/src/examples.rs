@@ -78,6 +78,14 @@ pub fn read_example_file(examples_root: &Path, relative_path: &str) -> Result<St
     fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))
 }
 
+/// Resolve the source directory of one example input without escaping its root.
+pub fn example_directory(examples_root: &Path, relative_path: &str) -> Result<PathBuf> {
+    let path = safe_example_path(examples_root, relative_path)?;
+    path.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow!("example input has no parent directory"))
+}
+
 /// Copy the selected top-level example family into a new writable workspace.
 pub fn prepare_example(examples_root: &Path, example_id: &str) -> Result<PreparedExample> {
     let catalog = list_examples(examples_root)?;
@@ -427,5 +435,6 @@ mod tests {
         let temporary = tempdir().expect("temporary examples");
         fs::create_dir_all(temporary.path().join("water")).expect("create examples");
         assert!(read_example_file(temporary.path(), "../secret.json").is_err());
+        assert!(example_directory(temporary.path(), "../secret.json").is_err());
     }
 }

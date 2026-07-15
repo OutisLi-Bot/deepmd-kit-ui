@@ -24,6 +24,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { InputSchemaForm } from "../components/InputSchemaForm";
 import { WorkflowIcon } from "../components/Icons";
+import { ChoiceSelect } from "../components/ChoiceSelect";
 import {
   collectMissing,
   compactInput,
@@ -311,18 +312,18 @@ export function TrainingWorkbench({
         <h2>Train locally</h2>
         <span className="ready-label"><Check size={12} /> Isolated runtime ready</span>
       </div>
-      <label className="run-control">
+      <div className="run-control">
         <span>Backend</span>
-        <div className="select-wrap">
-          <select value={backend} onChange={(event) => onBackend(event.target.value)}>
-            {backends.map((item) => {
-              const available = runtimeBackends.get(item.id) ?? false;
-              return <option key={item.id} value={item.id} disabled={!available}>{item.id}{available ? "" : " · unavailable"}</option>;
-            })}
-          </select>
-          <ChevronDown size={15} />
-        </div>
-      </label>
+        <ChoiceSelect
+          ariaLabel="Training backend"
+          value={backend}
+          options={backends.map((item) => {
+            const available = runtimeBackends.get(item.id) ?? false;
+            return { value: item.id, label: item.id, description: available ? "Available" : "Not installed", disabled: !available };
+          })}
+          onChange={onBackend}
+        />
+      </div>
       <label className="run-control">
         <span>Project folder</span>
         <div className="path-compact">
@@ -336,18 +337,20 @@ export function TrainingWorkbench({
       </button>
       {showExecution && (
         <div className="training-execution-options">
-          <label className="run-control">
+          <div className="run-control">
             <span>Start mode</span>
-            <div className="select-wrap">
-              <select value={startMode} onChange={(event) => { setStartMode(event.target.value as StartMode); setStartSource(null); }}>
-                <option value="fresh">Fresh training</option>
-                <option value="restart">Resume checkpoint</option>
-                <option value="init">Initialize checkpoint</option>
-                <option value="frozen">Initialize frozen model</option>
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </label>
+            <ChoiceSelect
+              ariaLabel="Training start mode"
+              value={startMode}
+              options={[
+                { value: "fresh", label: "Fresh training", description: "Start with newly initialized parameters" },
+                { value: "restart", label: "Resume checkpoint", description: "Continue optimizer and step state" },
+                { value: "init", label: "Initialize checkpoint", description: "Load model parameters only" },
+                { value: "frozen", label: "Initialize frozen model", description: "Start from a portable model" },
+              ]}
+              onChange={(next) => { setStartMode(next as StartMode); setStartSource(null); }}
+            />
+          </div>
           {startMode !== "fresh" && (
             <button className="source-picker" type="button" onClick={() => void browseStartSource()}>
               <FolderOpen size={15} /><span>{startSource ? basename(startSource) : "Choose source"}<small>{startSource ?? "Checkpoint or model path"}</small></span>

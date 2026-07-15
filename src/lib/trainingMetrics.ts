@@ -44,6 +44,14 @@ const exactLabels: Record<string, string> = {
   coord_l1_error: "Coordinate L1 error",
   token_error: "Token error",
   norm_loss: "Representation norm",
+  l2_ener_loss: "Energy MSE",
+  l2_force_loss: "Force MSE",
+  l2_force_r_loss: "Real-force MSE",
+  l2_force_m_loss: "Magnetic-force MSE",
+  l2_pref_force_loss: "Prefactor-force MSE",
+  l2_gen_force_loss: "Generalized-force MSE",
+  l2_virial_loss: "Virial MSE",
+  l2_atom_ener_loss: "Atomic energy MSE",
 };
 
 export function metricLabel(key: string): string {
@@ -61,18 +69,18 @@ export function metricLabel(key: string): string {
 
 export function metricGroup(key: string, lossTypes: string[] = []): string {
   const value = key.toLowerCase();
-  if (/(dos|cdf)/.test(value)) return "Density of states";
+  if (/(dos|cdf)/.test(value)) return "DOS & CDF";
   if (/(hessian|_h$)/.test(value)) return "Hessian";
-  if (/(force|rmse_f|mae_f|_fr$|_fm$|_pf$|_gf$)/.test(value)) return "Force";
   if (/(virial|_v$)/.test(value)) return "Virial";
   if (/(atom_ener|atomic_energy|_ae$)/.test(value)) return "Atomic energy";
+  if (/(force|rmse_f|mae_f|_fr$|_fm$|_pf$|_gf$)/.test(value)) return "Force";
   if (/(ener|rmse_e$|mae_e$|rmse_ea)/.test(value)) return "Energy";
   if (/(dipole|polar|tensor)/.test(value)) return "Tensor";
-  if (/(population|pop_|spin_)/.test(value)) return "Population & spin";
+  if (/(population|pop_|spin_|spin$)/.test(value)) return "Population & spin";
   if (/(coord|token|denoise|norm_loss)/.test(value)) return "Denoising";
   if (lossTypes.some((loss) => loss === "property")) return "Property";
-  if (value === "rmse" || value === "mae" || value === "loss") return "Overall";
-  return "Other metrics";
+  if (value === "rmse" || value === "mae" || value === "mse" || value === "mape" || value === "loss") return "Total loss";
+  return "Additional loss terms";
 }
 
 function seriesId(sample: TrainingMetricSample, key: string): string {
@@ -83,7 +91,7 @@ export function buildMetricSeries(training: TrainingSnapshot): TrainingMetricSer
   const rows = new Map<string, TrainingMetricSeries>();
   for (const sample of training.metrics) {
     for (const [key, value] of Object.entries(sample.values)) {
-      if (!Number.isFinite(value)) continue;
+      if (!Number.isFinite(value) || sample.phase === "total wall" || ["time", "avg", "eta", "wall_time"].includes(key.toLowerCase())) continue;
       const id = seriesId(sample, key);
       const existing = rows.get(id) ?? {
         id,

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-import { Ban, Check, CircleEllipsis, Clock3, Copy, LoaderCircle, X } from "lucide-react";
+import { Ban, Check, CircleEllipsis, Clock3, Copy, FolderOpen, LoaderCircle, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { openLocalPath } from "../lib/studio";
 import type { TaskSnapshot, TaskStatus } from "../types";
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -69,6 +70,11 @@ export function TaskConsole({ task, onCancel }: TaskConsoleProps) {
           </button>
         </div>
       </header>
+      <div className="console-directory-bar">
+        <FolderOpen size={14} />
+        <span title={task.request.workingDirectory}>{task.request.workingDirectory}</span>
+        <button className="console-button" type="button" onClick={() => void openLocalPath(task.request.workingDirectory)}><FolderOpen size={12} /> Open folder</button>
+      </div>
       <div className="console-command"><span>$</span> {command}</div>
       <pre className="console-output" aria-live="polite">
         {task.log.length ? task.log.join("\n") : "Waiting for process output…"}
