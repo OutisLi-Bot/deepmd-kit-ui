@@ -604,6 +604,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                window.maximize()?;
+            }
             let resources = app.path().resource_dir().ok();
             let runtime = PythonRuntime::isolated(resources.as_deref())?;
             let active_examples = runtime.prefix().join("deepmd-ui-examples");

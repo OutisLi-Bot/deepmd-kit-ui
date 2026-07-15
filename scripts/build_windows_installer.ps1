@@ -2,7 +2,8 @@
 [CmdletBinding()]
 param(
     [string] $TargetTriple = "x86_64-pc-windows-msvc",
-    [string] $AppVersion = ""
+    [string] $AppVersion = "",
+    [switch] $SkipInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,3 +97,31 @@ $Inventory = foreach ($File in $Media) {
 }
 $Inventory | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDir "SHA256SUMS.json") -Encoding UTF8
 $Media | Select-Object Name, Length, FullName
+
+# Local release builds install immediately so the next launch always exercises
+# the artifact that was just packaged. CI and callers using -SkipInstall keep
+# artifact generation side-effect free.
+$IsCi = $env:CI -match "^(true|1)$"
+if (-not $IsCi -and -not $SkipInstall) {
+    $InstallProcess = Start-Process `
+        -FilePath $Media[0].FullName `
+        -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS") `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    if ($InstallProcess.ExitCode -ne 0) {
+        throw "DeePMD Studio installation failed with exit code $($InstallProcess.ExitCode)."
+    }
+    $InstalledExecutable = Join-Path $env:LOCALAPPDATA "Programs\DeePMD Studio\deepmd-studio.exe"
+    if (-not (Test-Path -LiteralPath $InstalledExecutable -PathType Leaf)) {
+        throw "The installer completed but the application executable is missing: $InstalledExecutable"
+    }
+    $InstalledVersion = (Get-Item -LiteralPath $InstalledExecutable).VersionInfo.ProductVersion.Trim()
+    if ($InstalledVersion -ne $AppVersion) {
+        throw "Installed version $InstalledVersion does not match packaged version $AppVersion."
+    }
+    [pscustomobject]@{
+        InstalledVersion = $InstalledVersion
+        InstalledExecutable = $InstalledExecutable
+    }
+}

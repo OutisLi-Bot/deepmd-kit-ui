@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "deepmd-studio"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "deepmd-studio-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "dpstudio"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",

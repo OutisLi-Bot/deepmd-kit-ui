@@ -30,6 +30,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
+import { formatChartAxisValue, logarithmicTicks } from "../lib/chartScale";
 import { openLocalPath } from "../lib/studio";
 import { buildMetricSeries, groupMetricSeries, type TrainingMetricSeries } from "../lib/trainingMetrics";
 import type { TaskSnapshot, TrainingResourceSample } from "../types";
@@ -106,7 +107,7 @@ function linePath(values: Array<{ x: number; y: number }>): string {
 function LossChart({ series, unit }: { series: TrainingMetricSeries[]; unit: string | null }) {
   const width = 640;
   const height = 210;
-  const left = 48;
+  const left = 56;
   const right = 15;
   const top = 14;
   const bottom = 31;
@@ -119,18 +120,19 @@ function LossChart({ series, unit }: { series: TrainingMetricSeries[]; unit: str
   const logs = allPoints.map((point) => Math.log10(point.value));
   const rawMin = Math.min(...logs);
   const rawMax = Math.max(...logs);
-  const padding = Math.max(0.18, (rawMax - rawMin) * 0.12);
+  const padding = Math.max(0.06, (rawMax - rawMin) * 0.12);
   const yMin = rawMin - padding;
   const yMax = rawMax + padding;
+  const ySpan = Math.max(0.1, yMax - yMin);
   const x = (value: number) => left + ((value - xMin) / Math.max(1, xMax - xMin)) * (width - left - right);
-  const y = (value: number) => top + ((yMax - Math.log10(value)) / Math.max(0.1, yMax - yMin)) * (height - top - bottom);
-  const grid = Array.from({ length: 4 }, (_, index) => yMin + ((yMax - yMin) * index) / 3);
+  const y = (value: number) => top + ((yMax - Math.log10(value)) / ySpan) * (height - top - bottom);
+  const grid = logarithmicTicks(yMin, yMax);
 
   return (
     <svg className="loss-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Training metrics on a logarithmic scale">
       {grid.map((value) => {
-        const yPosition = top + ((yMax - value) / Math.max(0.1, yMax - yMin)) * (height - top - bottom);
-        return <g key={value}><line className="chart-grid-line" x1={left} x2={width - right} y1={yPosition} y2={yPosition} /><text className="chart-axis-label" x={left - 8} y={yPosition + 4} textAnchor="end">{`1e${Math.round(value)}`}</text></g>;
+        const yPosition = top + ((yMax - Math.log10(value)) / ySpan) * (height - top - bottom);
+        return <g key={value}><line className="chart-grid-line" x1={left} x2={width - right} y1={yPosition} y2={yPosition} /><text className="chart-axis-label" x={left - 8} y={yPosition + 4} textAnchor="end">{formatChartAxisValue(value)}</text></g>;
       })}
       <line className="chart-axis-line" x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} />
       {unit && <text className="chart-unit-label" x={width - right} y={11} textAnchor="end">{unit}</text>}
